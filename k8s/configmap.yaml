@@ -1,0 +1,28 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: remindmeai-config
+  namespace: remindmeai
+data:
+  APP_NAME: "RemindmeAI"
+  DEBUG: "false"
+  AWS_REGION: "us-east-1"
+  FRONTEND_URL: "https://app.remindmeai.com"
+  REDIS_URL: "redis://redis-service:6379/0"
+  CELERY_BROKER_URL: "redis://redis-service:6379/1"
+  CELERY_RESULT_BACKEND: "redis://redis-service:6379/2"
+  GMAIL_REDIRECT_URI: "https://api.remindmeai.com/auth/callback/gmail"
+  OUTLOOK_REDIRECT_URI: "https://api.remindmeai.com/auth/callback/outlook"
+  ENABLE_ML_CLASSIFIER: "true"
+  ML_CLASSIFIER_MODEL: "cross-encoder/nli-distilroberta-base"
+  PKCE_TTL_SECONDS: "600"
+  ENABLE_GOOGLE_CALENDAR: "true"
+  VAULT_ADDR: "https://vault.remindmeai-infra:8200"
+  VAULT_TRANSIT_KEY: "remindmeai"
+  VAULT_TRANSIT_MOUNT: "transit"
+  RATE_LIMIT_REQUESTS: "100"
+  RATE_LIMIT_WINDOW_SECONDS: "60"
+  LOG_LEVEL: "INFO"
+  LOG_JSON: "true"
+  EMAIL_RETENTION_DAYS: "90"
+  DEADLINE_RETENTION_DAYS: "365"

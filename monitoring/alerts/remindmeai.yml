@@ -1,0 +1,59 @@
+groups:
+  - name: remindmeai-application
+    rules:
+      # API latency P95 > 2 seconds
+      - alert: HighAPILatency
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(http_request_duration_seconds_bucket[5m])) by (le, path)
+          ) > 2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High API latency on {{ $labels.path }}"
+          description: "P95 latency is {{ $value }}s on path {{ $labels.path }}"
+
+      # Error rate > 5%
+      - alert: HighErrorRate
+        expr: |
+          sum(rate(http_requests_total{status_code=~"5.."}[5m]))
+          /
+          sum(rate(http_requests_total[5m])) > 0.05
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "High 5xx error rate"
+          description: "Error rate is {{ $value | humanizePercentage }}"
+
+      # Circuit breaker opened
+      - alert: CircuitBreakerOpen
+        expr: increase(remindme_circuit_breaker_open_total[5m]) > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Circuit breaker opened: {{ $labels.circuit_name }}"
+          description: "Circuit {{ $labels.circuit_name }} transitioned to OPEN state"
+
+      # No emails processed in 15 minutes during business hours
+      - alert: EmailProcessingStalled
+        expr: |
+          increase(remindme_emails_processed_total[15m]) == 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Email processing appears stalled"
+          description: "No emails processed in the last 15 minutes"
+
+      # Redis connection issues
+      - alert: RedisDown
+        expr: redis_connected_clients == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Redis has no connected clients"
+          description: "Redis may be down or unreachable"

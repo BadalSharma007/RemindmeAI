@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: remindmeai
+  labels:
+    app.kubernetes.io/name: remindmeai
+    environment: production

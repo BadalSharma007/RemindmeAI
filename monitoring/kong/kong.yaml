@@ -1,0 +1,84 @@
+# Kong Gateway — Declarative Configuration (deck format)
+# Apply with: deck sync --config kong.yaml
+_format_version: "3.0"
+_transform: true
+
+services:
+  - name: remindmeai-api
+    url: http://remindmeai-api-service:80
+    connect_timeout: 10000
+    read_timeout: 30000
+    write_timeout: 30000
+    retries: 2
+    routes:
+      - name: api-route
+        hosts:
+          - api.remindmeai.com
+        strip_path: false
+        preserve_host: true
+        protocols: ["https"]
+    plugins:
+      - name: rate-limiting
+        config:
+          minute: 100
+          hour: 2000
+          policy: redis
+          redis_host: redis-service
+          redis_port: 6379
+          redis_database: 3
+          fault_tolerant: true
+          hide_client_headers: false
+      - name: jwt
+        config:
+          claims_to_verify:
+            - exp
+          key_claim_name: sub
+          secret_is_base64: false
+        route: null  # Apply at service level; skip for /auth/callback/*
+      - name: cors
+        config:
+          origins:
+            - https://app.remindmeai.com
+          methods:
+            - GET
+            - POST
+            - PUT
+            - PATCH
+            - DELETE
+            - OPTIONS
+          headers:
+            - Authorization
+            - Content-Type
+          credentials: true
+          max_age: 3600
+      - name: prometheus
+        config:
+          status_code_metrics: true
+          latency_metrics: true
+          bandwidth_metrics: true
+          upstream_health_metrics: true
+      - name: request-id
+        config:
+          header_name: X-Request-ID
+          generator: uuid
+
+  - name: remindmeai-frontend
+    url: http://remindmeai-frontend-service:80
+    routes:
+      - name: frontend-route
+        hosts:
+          - app.remindmeai.com
+        strip_path: false
+        protocols: ["https"]
+    plugins:
+      - name: response-transformer
+        config:
+          add:
+            headers:
+              - "Cache-Control: public, max-age=3600"
+
+consumers:
+  - username: internal-service
+    jwt_secrets:
+      - algorithm: HS256
+        key: internal-service-key

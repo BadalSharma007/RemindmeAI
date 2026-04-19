@@ -1,0 +1,88 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: remindmeai-ingress
+  namespace: remindmeai
+  annotations:
+    kubernetes.io/ingress.class: "kong"
+    konghq.com/plugins: "remindmeai-rate-limit,remindmeai-jwt,remindmeai-cors"
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+spec:
+  tls:
+    - hosts:
+        - api.remindmeai.com
+        - app.remindmeai.com
+      secretName: remindmeai-tls
+  rules:
+    - host: api.remindmeai.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: remindmeai-api-service
+                port:
+                  number: 80
+    - host: app.remindmeai.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: remindmeai-frontend-service
+                port:
+                  number: 80
+---
+# Kong Plugin: rate limiting
+apiVersion: configuration.konghq.com/v1
+kind: KongPlugin
+metadata:
+  name: remindmeai-rate-limit
+  namespace: remindmeai
+plugin: rate-limiting
+config:
+  minute: 100
+  hour: 2000
+  policy: redis
+  redis_host: redis-service
+  redis_port: 6379
+  redis_database: 3
+  fault_tolerant: true
+---
+# Kong Plugin: JWT validation
+apiVersion: configuration.konghq.com/v1
+kind: KongPlugin
+metadata:
+  name: remindmeai-jwt
+  namespace: remindmeai
+plugin: jwt
+config:
+  claims_to_verify:
+    - exp
+  key_claim_name: sub
+---
+# Kong Plugin: CORS
+apiVersion: configuration.konghq.com/v1
+kind: KongPlugin
+metadata:
+  name: remindmeai-cors
+  namespace: remindmeai
+plugin: cors
+config:
+  origins:
+    - https://app.remindmeai.com
+  methods:
+    - GET
+    - POST
+    - PUT
+    - PATCH
+    - DELETE
+    - OPTIONS
+  headers:
+    - Authorization
+    - Content-Type
+    - X-Requested-With
+  credentials: true
+  max_age: 3600

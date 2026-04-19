@@ -1,0 +1,49 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: remindmeai-prod
+    env: production
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: []
+
+rule_files:
+  - "alerts/*.yml"
+
+scrape_configs:
+  # FastAPI application metrics
+  - job_name: remindmeai-api
+    static_configs:
+      - targets: ["remindmeai-api-service:8000"]
+    metrics_path: /metrics
+    scrape_interval: 15s
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+
+  # Celery worker metrics (celery-exporter sidecar)
+  - job_name: celery-exporter
+    static_configs:
+      - targets: ["celery-exporter:9540"]
+    scrape_interval: 30s
+
+  # Redis metrics (redis-exporter sidecar)
+  - job_name: redis
+    static_configs:
+      - targets: ["redis-exporter:9121"]
+    scrape_interval: 15s
+
+  # PostgreSQL metrics (postgres-exporter sidecar)
+  - job_name: postgresql
+    static_configs:
+      - targets: ["postgres-exporter:9187"]
+    scrape_interval: 30s
+
+  # Node-level metrics (kube-state-metrics)
+  - job_name: kube-state-metrics
+    static_configs:
+      - targets: ["kube-state-metrics:8080"]
+    scrape_interval: 30s
