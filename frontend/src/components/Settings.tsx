@@ -19,6 +19,11 @@ export function Settings() {
     window.location.reload();
   };
 
+  const handleLogout = () => {
+    localStorage.removeItem("access_token");
+    window.location.href = "/login";
+  };
+
   return (
     <div>
       <h1 className="text-2xl font-semibold text-gray-900 mb-8">Settings</h1>
@@ -27,6 +32,12 @@ export function Settings() {
         <h2 className="text-lg font-medium text-gray-900 mb-4">Account</h2>
         <p className="text-sm text-gray-600">Email: <span className="font-medium">{user?.email ?? "—"}</span></p>
         <p className="text-sm text-gray-600 mt-1">Timezone: <span className="font-medium">{user?.timezone ?? "UTC"}</span></p>
+        <button
+          onClick={handleLogout}
+          className="mt-4 bg-gray-100 text-gray-700 border border-gray-300 px-4 py-2 rounded-lg text-sm hover:bg-gray-200"
+        >
+          Log out
+        </button>
       </div>
 
       <div className="bg-white rounded-xl border border-gray-200 p-6 shadow-sm mb-6">
