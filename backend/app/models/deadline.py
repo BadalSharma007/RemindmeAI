@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, ForeignKey, String, func
+from sqlalchemy import DateTime, Float, ForeignKey, String, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -12,6 +12,9 @@ from app.database import Base
 
 class Deadline(Base):
     __tablename__ = "deadlines"
+    __table_args__ = (
+        UniqueConstraint('extracted_email_id', 'due_at', name='uq_deadline_email_due'),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4

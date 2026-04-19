@@ -110,6 +110,9 @@ async def _process_async(email_id: str) -> dict:
             logger.warning("process_email_nlp: email %s not found", email_id)
             return result
 
+        if email.is_processed:
+            return result  # Already processed — skip to prevent duplicates on retry
+
         # Load connection → user
         conn_stmt = select(EmailConnection).where(EmailConnection.id == email.connection_id)
         conn_row = await db.execute(conn_stmt)
@@ -189,7 +192,16 @@ async def _process_async(email_id: str) -> dict:
             pass
 
         for dl in raw_deadlines:
-            # 4. Create Deadline row
+            # 4. Create Deadline row — skip if already exists for this email + due_at
+            existing_dl = await db.execute(
+                select(Deadline).where(
+                    Deadline.extracted_email_id == email.id,
+                    Deadline.due_at == dl.due_at,
+                )
+            )
+            if existing_dl.scalar_one_or_none():
+                continue
+
             deadline_row = Deadline(
                 user_id=user.id,
                 extracted_email_id=email.id,
@@ -218,10 +230,16 @@ async def _process_async(email_id: str) -> dict:
                 except Exception as cal_exc:
                     logger.warning("Calendar event creation failed: %s", cal_exc)
 
-            # 6. Schedule reminder
+            # 6. Schedule reminder — skip if already exists for this deadline
             fire_at = dl.due_at - timedelta(minutes=user.reminder_lead_minutes)
             now = datetime.now(timezone.utc)
             if fire_at > now:
+                existing_r = await db.execute(
+                    select(Reminder).where(Reminder.deadline_id == deadline_row.id)
+                )
+                if existing_r.scalar_one_or_none():
+                    continue
+
                 reminder_row = Reminder(
                     deadline_id=deadline_row.id,
                     user_id=user.id,
