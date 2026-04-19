@@ -11,7 +11,7 @@ import { authApi } from "./api/auth";
 function LoginPage() {
   const handleLogin = () => {
     // Direct redirect to backend — avoids CORS preflight on POST
-    window.location.href = "https://proactive-unadorned-gout.ngrok-free.dev/auth/start/gmail";
+    window.location.href = `${import.meta.env.VITE_API_BASE_URL ?? ""}/auth/start/gmail`;
   };
 
   return (
