@@ -26,6 +26,7 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 # multi-worker deployments.  The fallback keeps Phase 1 dev behaviour intact.
 # ---------------------------------------------------------------------------
 _PKCE_FALLBACK: dict[str, str] = {}
+_REDIRECT_FALLBACK: dict[str, str] = {}
 
 
 def _pkce_set(state: str, code_verifier: str) -> None:
@@ -57,15 +58,51 @@ def _pkce_pop(state: str) -> str | None:
         return _PKCE_FALLBACK.pop(state, None)
 
 
+def _redirect_set(state: str, redirect_url: str) -> None:
+    try:
+        import redis as _redis  # noqa: PLC0415
+
+        from app.config import settings as _s  # noqa: PLC0415
+
+        r = _redis.from_url(_s.redis_url, socket_connect_timeout=1)
+        r.setex(f"redirect:{state}", _s.pkce_ttl_seconds, redirect_url)
+    except Exception:  # noqa: BLE001
+        _REDIRECT_FALLBACK[state] = redirect_url
+
+
+def _redirect_pop(state: str) -> str | None:
+    try:
+        import redis as _redis  # noqa: PLC0415
+
+        from app.config import settings as _s  # noqa: PLC0415
+
+        r = _redis.from_url(_s.redis_url, socket_connect_timeout=1)
+        key = f"redirect:{state}"
+        raw = r.get(key)
+        if raw:
+            r.delete(key)
+            return raw.decode()
+        return None
+    except Exception:  # noqa: BLE001
+        return _REDIRECT_FALLBACK.pop(state, None)
+
+
 @router.get("/start/{provider}")
-async def start_oauth_redirect(provider: str):
-    """Browser-friendly GET endpoint — redirects straight to Google/Outlook login."""
+async def start_oauth_redirect(
+    provider: str,
+    redirect_url: str | None = Query(None, description="Mobile deep-link URL to redirect to after login (e.g. exp://...)"),
+):
+    """Browser-friendly GET endpoint — redirects straight to Google/Outlook login.
+    Pass ?redirect_url=exp://... for React Native / mobile deep-link support.
+    """
     from fastapi.responses import RedirectResponse as _RR  # noqa: PLC0415
     if provider == "gmail":
         from app.services.oauth.gmail import generate_pkce_pair, gmail_oauth_client  # noqa: PLC0415
         state = secrets.token_urlsafe(32)
         code_verifier, _ = generate_pkce_pair()
         _pkce_set(state, code_verifier)
+        if redirect_url:
+            _redirect_set(state, redirect_url)
         url = await gmail_oauth_client.get_authorization_url(state, code_verifier)
         return _RR(url)
     raise HTTPException(status_code=400, detail=f"Provider '{provider}' not supported")
@@ -184,9 +221,19 @@ async def oauth_callback(
 
     jwt_token = create_access_token(subject=str(user.id))
 
-    # Redirect to frontend with token in URL so the UI can pick it up automatically
     from fastapi.responses import RedirectResponse  # noqa: PLC0415
     from app.config import settings as cfg  # noqa: PLC0415
+
+    # If a mobile deep-link redirect_url was provided at /auth/start, use it
+    mobile_redirect = _redirect_pop(state)
+    if mobile_redirect:
+        sep = "&" if "?" in mobile_redirect else "?"
+        return RedirectResponse(
+            url=f"{mobile_redirect}{sep}token={jwt_token}&email={user_info.email}",
+            status_code=302,
+        )
+
+    # Default: web dashboard
     frontend = cfg.frontend_url.rstrip("/")
     return RedirectResponse(
         url=f"{frontend}/auth/callback?token={jwt_token}&email={user_info.email}",
