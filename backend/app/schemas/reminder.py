@@ -14,6 +14,7 @@ class ReminderRead(BaseModel):
     channel: str
     status: str
     sent_at: datetime | None = None
+    snooze_until: datetime | None = None
 
     model_config = {"from_attributes": True}
 

@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { format, parseISO, addHours } from "date-fns";
+import { format, parseISO, addHours, formatDistanceToNow } from "date-fns";
 import {
   Bell, Clock, AlarmClock, CheckCircle2, XCircle, Send,
   Filter, Search,
@@ -73,7 +73,7 @@ export function Reminders() {
         return res.json();
       })
       .then(data => {
-        if (Array.isArray(data) && data.length > 0) {
+        if (Array.isArray(data)) {
           setReminders(data);
           setIsDemoMode(false);
         } else {
@@ -88,9 +88,19 @@ export function Reminders() {
 
   if (isLoading) return <RemindersSkeleton />;
 
-  const handleSnooze1h = (id: string) => {
+  const handleSnooze1h = async (id: string) => {
+    const token = localStorage.getItem("access_token");
+    const baseUrl = import.meta.env.VITE_API_BASE_URL ?? "";
+    const snoozeUntil = addHours(new Date(), 1).toISOString();
+    try {
+      await fetch(`${baseUrl}/reminders/${id}/snooze`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token ?? ""}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ snooze_until: snoozeUntil }),
+      });
+    } catch { /* optimistic update still applies */ }
     setReminders(prev =>
-      prev.map(r => r.id === id ? { ...r, status: "snoozed" as const, scheduled_at: addHours(new Date(), 1).toISOString() } : r)
+      prev.map(r => r.id === id ? { ...r, status: "snoozed" as const, scheduled_at: snoozeUntil } : r)
     );
   };
 
@@ -180,6 +190,7 @@ export function Reminders() {
                       <Clock className="w-3.5 h-3.5 text-on-surface-variant/50" />
                       <p className="text-body-md text-on-surface-variant">
                         Scheduled: <span className="text-on-surface font-medium">{format(parseISO(r.scheduled_at), "MMM d, yyyy · h:mm a")}</span>
+                        <span className="ml-1.5 text-xs opacity-60">({formatDistanceToNow(parseISO(r.scheduled_at), { addSuffix: true })})</span>
                       </p>
                     </div>
                     <div className="flex flex-wrap items-center gap-2.5">

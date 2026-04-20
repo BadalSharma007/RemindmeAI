@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { format, parseISO } from "date-fns";
+import { format, parseISO, formatDistanceToNow, isPast } from "date-fns";
 import {
   CalendarClock, Check, X, Clock, AlertTriangle, CheckCircle2, XCircle,
   Filter, Search,
@@ -64,7 +64,7 @@ export function Deadlines() {
     }
 
     const baseUrl = import.meta.env.VITE_API_BASE_URL ?? "";
-    fetch(`${baseUrl}/deadlines?status=pending`, {
+    fetch(`${baseUrl}/deadlines?limit=200`, {
       headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
     })
       .then(res => {
@@ -72,7 +72,7 @@ export function Deadlines() {
         return res.json();
       })
       .then(data => {
-        if (Array.isArray(data) && data.length > 0) {
+        if (Array.isArray(data)) {
           setDeadlines(data);
           setIsDemoMode(false);
         } else {
@@ -87,7 +87,16 @@ export function Deadlines() {
 
   if (isLoading) return <DeadlinesSkeleton />;
 
-  const handleAction = (id: string, status: "completed" | "dismissed") => {
+  const handleAction = async (id: string, status: "completed" | "dismissed") => {
+    const token = localStorage.getItem("access_token");
+    const baseUrl = import.meta.env.VITE_API_BASE_URL ?? "";
+    try {
+      await fetch(`${baseUrl}/deadlines/${id}`, {
+        method: "PATCH",
+        headers: { Authorization: `Bearer ${token ?? ""}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ status }),
+      });
+    } catch { /* optimistic update still applies */ }
     setDeadlines(prev => prev.map(dl => dl.id === id ? { ...dl, status } : dl));
   };
 
@@ -144,9 +153,9 @@ export function Deadlines() {
           <div className="w-16 h-16 rounded-2xl bg-surface-container-high flex items-center justify-center mx-auto mb-5">
             <CalendarClock className="w-7 h-7 text-on-surface-variant/40" />
           </div>
-          <h3 className="text-title-md text-on-surface mb-2">{searchQuery ? "No matches found" : "All clear"}</h3>
+          <h3 className="text-title-md text-on-surface mb-2">{searchQuery ? "No matches found" : activeFilter !== "all" ? `No ${activeFilter} deadlines` : "No deadlines yet"}</h3>
           <p className="text-body-md text-on-surface-variant max-w-sm mx-auto">
-            {searchQuery ? `No deadlines matching "${searchQuery}".` : "No pending deadlines. Check back after your emails are processed."}
+            {searchQuery ? `No deadlines matching "${searchQuery}".` : isDemoMode ? "Connect Gmail to start detecting deadlines from your emails." : "Your emails are being processed. New deadlines will appear here automatically."}
           </p>
         </div>
       ) : (
@@ -167,8 +176,11 @@ export function Deadlines() {
                     {dl.source_text && <p className="text-xs text-on-surface-variant/40 mt-1.5 truncate">{dl.source_text}</p>}
                     <div className="flex flex-wrap items-center gap-3 mt-3">
                       <div className="flex items-center gap-1.5">
-                        <Clock className="w-3.5 h-3.5 text-on-surface-variant/50" />
-                        <span className="text-body-md text-on-surface-variant">{format(parseISO(dl.due_at), "MMM d, yyyy · h:mm a")}</span>
+                        <Clock className={`w-3.5 h-3.5 ${isPast(parseISO(dl.due_at)) && dl.status === "pending" ? "text-error" : "text-on-surface-variant/50"}`} />
+                        <span className={`text-body-md ${isPast(parseISO(dl.due_at)) && dl.status === "pending" ? "text-error font-medium" : "text-on-surface-variant"}`}>
+                          {format(parseISO(dl.due_at), "MMM d, yyyy · h:mm a")}
+                          <span className="ml-1.5 text-xs opacity-70">({formatDistanceToNow(parseISO(dl.due_at), { addSuffix: true })})</span>
+                        </span>
                       </div>
                       <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold ${cfg.bg} ${cfg.text}`}>
                         <StatusIcon className="w-3 h-3" />{cfg.label}

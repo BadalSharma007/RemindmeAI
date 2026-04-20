@@ -63,7 +63,6 @@ async def snooze_reminder(
         r = redis_lib.from_url(settings.redis_url)
         scheduler = ReminderScheduler(r)
         scheduler.snooze(reminder_id, body.snooze_until)
-        reminder.status = "pending"  # Re-activate for dispatch
     except Exception:
         pass
 
