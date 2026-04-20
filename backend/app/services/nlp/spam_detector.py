@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 # Threshold above which an email is considered spam/marketing.
-SPAM_THRESHOLD: float = 0.5
+SPAM_THRESHOLD: float = 0.65
 
 # ---------------------------------------------------------------------------
 # Keyword sets
