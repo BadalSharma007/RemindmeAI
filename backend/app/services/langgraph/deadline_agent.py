@@ -44,17 +44,12 @@ class DeadlineState(TypedDict):
 
 def _get_llm():
     from app.config import settings
-    if settings.use_gemini and settings.gemini_api_key:
-        from langchain_google_genai import ChatGoogleGenerativeAI
-        return ChatGoogleGenerativeAI(
-            model="gemini-2.5-flash",
-            google_api_key=settings.gemini_api_key,
-            temperature=0,
-        )
-    from langchain_ollama import ChatOllama
-    return ChatOllama(
-        model=settings.ollama_model,
-        base_url=settings.ollama_base_url,
+    if not settings.gemini_api_key:
+        raise RuntimeError("GEMINI_API_KEY is not set — cannot run deadline extraction")
+    from langchain_google_genai import ChatGoogleGenerativeAI
+    return ChatGoogleGenerativeAI(
+        model="gemini-2.5-flash",
+        google_api_key=settings.gemini_api_key,
         temperature=0,
     )
 

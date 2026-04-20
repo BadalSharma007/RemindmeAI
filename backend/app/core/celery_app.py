@@ -14,6 +14,7 @@ celery_app = Celery(
         "app.services.ingestion.outlook_poller",
         "app.services.reminders.dispatcher",
         "app.services.nlp.processor",
+        "app.services.nlp.rescue",
         "app.services.maintenance.data_retention",
     ],
 )
@@ -50,5 +51,10 @@ celery_app.conf.beat_schedule = {
     "purge-old-data-nightly": {
         "task": "app.services.maintenance.data_retention.purge_old_data",
         "schedule": crontab(hour=2, minute=0),
+    },
+    # Rescue: re-queue orphaned emails every 5 minutes
+    "rescue-orphaned-emails": {
+        "task": "app.services.nlp.rescue.rescue_orphaned_emails",
+        "schedule": 300.0,
     },
 }

@@ -86,11 +86,26 @@ async def _poll_single_connection(db, connection) -> int:
             messages = resp.json().get("messages", [])
     except httpx.HTTPStatusError as exc:
         if exc.response.status_code in (401, 403):
-            logger.warning("Gmail auth error for connection %s: %s", connection.id, exc)
-            connection.is_active = False
-            await db.commit()
-            return 0
-        raise
+            logger.warning("Gmail auth error for connection %s — attempting token refresh", connection.id)
+            try:
+                access_token = await _ensure_fresh_token(db, connection)
+                # Retry the list request once after refresh
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    resp = await client.get(
+                        GMAIL_MESSAGES_URL,
+                        headers={"Authorization": f"Bearer {access_token}"},
+                        params={"maxResults": 50, "q": query},
+                    )
+                    resp.raise_for_status()
+                    messages = resp.json().get("messages", [])
+            except Exception as refresh_exc:
+                logger.error("Token refresh failed for connection %s: %s", connection.id, refresh_exc)
+                # Only disable after persistent failures — not on first error
+                connection.is_active = False
+                await db.commit()
+                return 0
+        else:
+            raise
 
     count = 0
     for msg_ref in messages:
@@ -132,11 +147,17 @@ async def _poll_single_connection(db, connection) -> int:
         db.add(email_row)
         await db.flush()  # get email_row.id
 
-        # Phase 3: publish to NLP queue (decoupled)
-        try:
-            publish_email_for_nlp(email_row.id)
-        except Exception as exc:
-            logger.warning("Failed to publish email %s to NLP queue: %s", email_row.id, exc)
+        # Publish to NLP queue — retry 3x so no email is silently lost
+        # If all retries fail, rescue task will re-queue within 5 minutes
+        for attempt in range(3):
+            try:
+                publish_email_for_nlp(email_row.id)
+                break
+            except Exception as exc:
+                if attempt == 2:
+                    logger.error("PUBLISH_FAILED email_id=%s subject=%r — rescue task will retry", email_row.id, email_row.subject)
+                else:
+                    await asyncio.sleep(1)
 
         count += 1
 

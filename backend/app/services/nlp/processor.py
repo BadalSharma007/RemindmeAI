@@ -22,6 +22,8 @@ import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 
+from sqlalchemy import update
+
 logger = logging.getLogger(__name__)
 
 
@@ -90,9 +92,7 @@ async def _process_async(email_id: str) -> dict:
     from app.models.user import User
     from app.models.email_connection import EmailConnection
     from app.services.nlp.spam_detector import detect_spam
-    from app.services.nlp.cleaner import clean_text
     from app.services.nlp.classifier import classify_email_combined
-    from app.services.nlp.deadline_extractor import extract_deadlines
 
     result = {
         "email_id": email_id,
@@ -102,16 +102,18 @@ async def _process_async(email_id: str) -> dict:
     }
 
     async with AsyncSessionLocal() as db:
-        # Load email
-        stmt = select(ExtractedEmail).where(ExtractedEmail.id == email_id)
-        row = await db.execute(stmt)
-        email = row.scalar_one_or_none()
+        # Atomically claim the email — only one worker can process it
+        # If another worker already claimed it, scalar_one_or_none() returns None
+        claim = await db.execute(
+            update(ExtractedEmail)
+            .where(ExtractedEmail.id == email_id, ExtractedEmail.is_processed == False)
+            .values(is_processed=True)
+            .returning(ExtractedEmail)
+        )
+        email = claim.scalar_one_or_none()
         if email is None:
-            logger.warning("process_email_nlp: email %s not found", email_id)
+            logger.debug("process_email_nlp: email %s already claimed or not found", email_id)
             return result
-
-        if email.is_processed:
-            return result  # Already processed — skip to prevent duplicates on retry
 
         # Load connection → user
         conn_stmt = select(EmailConnection).where(EmailConnection.id == email.connection_id)
@@ -151,38 +153,33 @@ async def _process_async(email_id: str) -> dict:
             await db.commit()
             return result
 
-        # 3. Deadline extraction — LangGraph agent (Gemma) with spaCy fallback
-        from app.config import settings as cfg
-        if cfg.enable_langgraph:
-            try:
-                from app.services.langgraph.deadline_agent import extract_deadlines_with_agent
-                agent_results = extract_deadlines_with_agent(
-                    subject=email.subject or "",
-                    snippet=email.snippet or "",
-                    received_at=email.received_at or datetime.now(timezone.utc),
-                    user_timezone=user.timezone if user.timezone and user.timezone != "UTC" else "Asia/Kolkata",
-                )
-                # Convert to same format as spaCy extractor
-                class _DL:
-                    def __init__(self, d):
-                        self.due_at = d['due_at']
-                        self.confidence = d['confidence']
-                        self.source_text = d['source_text']
-                raw_deadlines = [_DL(d) for d in agent_results]
-                logger.info("LangGraph extracted %d deadlines for email %s", len(raw_deadlines), email_id)
-            except Exception as lg_exc:
-                logger.warning("LangGraph failed, falling back to spaCy: %s", lg_exc)
-                text_for_nlp = clean_text(f"{email.subject} {email.snippet}")
-                raw_deadlines = extract_deadlines(
-                    text_for_nlp,
-                    reference_time=email.received_at or datetime.now(timezone.utc),
-                )
-        else:
-            text_for_nlp = clean_text(f"{email.subject} {email.snippet}")
-            raw_deadlines = extract_deadlines(
-                text_for_nlp,
-                reference_time=email.received_at or datetime.now(timezone.utc),
+        # 3. Deadline extraction — Gemini via LangGraph (no spaCy fallback)
+        # If Gemini fails, un-claim the email so rescue task retries it cleanly
+        try:
+            from app.services.langgraph.deadline_agent import extract_deadlines_with_agent
+            agent_results = extract_deadlines_with_agent(
+                subject=email.subject or "",
+                snippet=email.snippet or "",
+                received_at=email.received_at or datetime.now(timezone.utc),
+                user_timezone=user.timezone if user.timezone and user.timezone != "UTC" else "Asia/Kolkata",
             )
+            class _DL:
+                def __init__(self, d):
+                    self.due_at = d['due_at']
+                    self.confidence = d['confidence']
+                    self.source_text = d['source_text']
+            raw_deadlines = [_DL(d) for d in agent_results]
+            logger.info("Gemini extracted %d deadlines for email %s", len(raw_deadlines), email_id)
+        except Exception as lg_exc:
+            logger.error("Gemini extraction failed for email %s: %s — releasing for rescue", email_id, lg_exc)
+            # Un-claim so the rescue task can re-queue this email
+            await db.execute(
+                update(ExtractedEmail)
+                .where(ExtractedEmail.id == email_id)
+                .values(is_processed=False)
+            )
+            await db.commit()
+            raise
 
         # Load Gmail access token for Calendar (best-effort)
         access_token: str | None = None
@@ -262,7 +259,6 @@ async def _process_async(email_id: str) -> dict:
                 except Exception as redis_exc:
                     logger.warning("Redis scheduling failed: %s", redis_exc)
 
-        email.is_processed = True
         await db.commit()
 
     return result
