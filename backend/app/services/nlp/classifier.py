@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 
 DEADLINE_KEYWORDS: frozenset[str] = frozenset(
@@ -94,8 +95,85 @@ DEADLINE_KEYWORDS: frozenset[str] = frozenset(
         "must submit",
         "must complete",
         "must send",
+        # Academic / student keywords
+        "tomorrow",
+        "tonight",
+        "exam",
+        "test",
+        "quiz",
+        "class test",
+        "conducted",
+        "present",
+        "on time",
+        "attendance",
+        "lecture",
+        "seminar",
+        "workshop",
+        "session",
+        "assignment",
+        "project",
+        "viva",
+        "practical",
+        "lab",
+        "report due",
+        "next monday",
+        "next tuesday",
+        "next wednesday",
+        "next thursday",
+        "next friday",
+        "next week",
+        "this week",
+        "this friday",
+        "today at",
+        "tomorrow at",
+        "monday at",
+        "tuesday at",
+        "wednesday at",
+        "thursday at",
+        "friday at",
+        "at 9",
+        "at 10",
+        "at 11",
+        "at 12",
+        "at 1",
+        "at 2",
+        "at 3",
+        "at 4",
+        "at 5",
+        "at 6",
+        "at 7",
+        "at 8",
+        "ensure",
+        "be present",
+        "must attend",
+        "please attend",
+        "kindly attend",
+        "will be held",
+        "will be conducted",
+        "is scheduled",
+        "has been scheduled",
+        "event",
+        "internship",
+        "placement",
+        "hackathon",
+        "competition",
+        "contest",
     }
 )
+
+# Regex patterns to catch time/date references the keyword list might miss
+_TIME_PATTERNS: list[re.Pattern] = [
+    re.compile(r'\b\d{1,2}:\d{2}\s*(am|pm)\b', re.IGNORECASE),   # 10:30 AM
+    re.compile(r'\b\d{1,2}\s*(am|pm)\b', re.IGNORECASE),          # 10 AM
+    re.compile(r'\btomorrow\b', re.IGNORECASE),
+    re.compile(r'\btonight\b', re.IGNORECASE),
+    re.compile(r'\bnext\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday|week|month)\b', re.IGNORECASE),
+    re.compile(r'\bthis\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday|week)\b', re.IGNORECASE),
+    re.compile(r'\bon\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b', re.IGNORECASE),
+    re.compile(r'\b(january|february|march|april|may|june|july|august|september|october|november|december)\s+\d{1,2}\b', re.IGNORECASE),
+    re.compile(r'\b\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}\b'),        # 25/04/2026
+    re.compile(r'\b\d{1,2}\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\b', re.IGNORECASE),
+]
 
 
 @dataclass
@@ -109,8 +187,8 @@ class ClassificationResult:
 def classify_email(subject: str, snippet: str) -> ClassificationResult:
     """
     Tier 1 rule-based classifier.
-    Scans the lowercased subject + snippet for DEADLINE_KEYWORDS.
-    Confidence is proportional to the number of unique keyword hits.
+    Step 1: keyword scan.
+    Step 2: regex time/date pattern scan as fallback.
     """
     combined = f"{subject} {snippet}".lower()
     matched: list[str] = []
@@ -119,20 +197,27 @@ def classify_email(subject: str, snippet: str) -> ClassificationResult:
         if keyword in combined:
             matched.append(keyword)
 
-    if not matched:
+    if matched:
+        confidence = min(0.4 + (len(matched) - 1) * 0.11, 0.95)
         return ClassificationResult(
-            is_deadline_related=False,
-            confidence=0.0,
-            matched_keywords=[],
+            is_deadline_related=True,
+            confidence=round(confidence, 2),
+            matched_keywords=matched,
         )
 
-    # Confidence scales from 0.4 (1 match) to 0.95 (5+ matches)
-    confidence = min(0.4 + (len(matched) - 1) * 0.11, 0.95)
+    # Fallback: check for time/date patterns
+    for pattern in _TIME_PATTERNS:
+        if pattern.search(combined):
+            return ClassificationResult(
+                is_deadline_related=True,
+                confidence=0.4,
+                matched_keywords=["[time/date pattern]"],
+            )
 
     return ClassificationResult(
-        is_deadline_related=True,
-        confidence=round(confidence, 2),
-        matched_keywords=matched,
+        is_deadline_related=False,
+        confidence=0.0,
+        matched_keywords=[],
     )
 
 
@@ -143,34 +228,20 @@ def classify_email(subject: str, snippet: str) -> ClassificationResult:
 def classify_email_combined(subject: str, snippet: str) -> ClassificationResult:
     """
     Two-tier classifier used by the ingestion pipeline in Phase 2.
-
-    Tier 1 (rule-based) always runs first.  When its confidence is below
-    0.5 *and* the ML model is available, Tier 2 (DistilBERT zero-shot) runs
-    to re-score the email.  Final confidence is a weighted blend.
-
-    If the ML model is unavailable (``fallback_used=True``), Tier 1 result
-    is returned unchanged.
-
-    Weights:
-      - Tier 1 contribution: 40 %
-      - Tier 2 contribution: 60 %
     """
     from app.config import settings  # noqa: PLC0415
 
     tier1 = classify_email(subject, snippet)
 
-    # High Tier 1 confidence — no need for expensive ML inference
     if tier1.confidence >= 0.5 or not settings.enable_ml_classifier:
         return tier1
 
-    # Run ML Tier 2
     from app.services.nlp.ml_classifier import classify_email_ml  # noqa: PLC0415
 
     tier2 = classify_email_ml(subject, snippet)
     if tier2.fallback_used:
-        return tier1  # ML unavailable — trust Tier 1
+        return tier1
 
-    # Weighted blend
     blended = round(tier1.confidence * 0.4 + tier2.confidence * 0.6, 2)
 
     return ClassificationResult(
