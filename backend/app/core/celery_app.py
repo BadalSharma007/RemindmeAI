@@ -34,14 +34,13 @@ celery_app.conf.update(
 )
 
 celery_app.conf.beat_schedule = {
-    "poll-gmail-every-5min": {
+    "poll-gmail-every-1min": {
         "task": "app.services.ingestion.gmail_poller.poll_all_gmail_connections",
-        "schedule": crontab(minute="*/5"),
+        "schedule": 60.0,
     },
-    # Phase 3: Outlook polling
-    "poll-outlook-every-5min": {
+    "poll-outlook-every-1min": {
         "task": "app.services.ingestion.outlook_poller.poll_all_outlook_connections",
-        "schedule": crontab(minute="*/5"),
+        "schedule": 60.0,
     },
     "dispatch-reminders-every-30s": {
         "task": "app.services.reminders.dispatcher.dispatch_due_reminders",
