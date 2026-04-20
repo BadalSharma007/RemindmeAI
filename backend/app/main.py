@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.config import settings
 from app.core.logging_config import configure_logging
-from app.routers import auth, deadlines, notifications, preferences, reminders, stats, subscriptions
+from app.routers import auth, deadlines, internal, notifications, preferences, reminders, stats, subscriptions
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +79,7 @@ def create_app() -> FastAPI:
     app.include_router(subscriptions.router)
     app.include_router(stats.router)
     app.include_router(notifications.router)
+    app.include_router(internal.router)
 
     # --- Built-in endpoints ---
 
