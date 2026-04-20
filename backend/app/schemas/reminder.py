@@ -19,6 +19,21 @@ class ReminderRead(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class ReminderCreate(BaseModel):
+    deadline_id: UUID
+    scheduled_at: datetime
+    channel: str = "email"
+
+    model_config = {"extra": "forbid"}
+
+
+class ReminderPatch(BaseModel):
+    scheduled_at: datetime | None = None
+    channel: str | None = None
+
+    model_config = {"extra": "forbid"}
+
+
 class SnoozeRequest(BaseModel):
     snooze_until: datetime
 

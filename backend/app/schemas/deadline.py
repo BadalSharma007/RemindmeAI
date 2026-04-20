@@ -27,6 +27,14 @@ class DeadlineRead(BaseModel):
         return v
 
 
+class DeadlineCreate(BaseModel):
+    title: str
+    due_at: datetime
+    source_text: str | None = None
+
+    model_config = {"extra": "forbid"}
+
+
 class DeadlinePatch(BaseModel):
     status: Literal["pending", "reminded", "dismissed", "completed"] | None = None
     title: str | None = None

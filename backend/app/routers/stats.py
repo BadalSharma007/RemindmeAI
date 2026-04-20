@@ -39,6 +39,12 @@ async def get_dashboard_stats(
     )
     pending_deadlines = pending_result.scalar() or 0
 
+    # Completed deadlines
+    completed_result = await db.execute(
+        select(func.count()).where(Deadline.user_id == uid, Deadline.status == "completed")
+    )
+    completed_deadlines = completed_result.scalar() or 0
+
     # Upcoming reminders (next 24h, pending)
     upcoming_result = await db.execute(
         select(func.count()).where(
@@ -73,6 +79,7 @@ async def get_dashboard_stats(
     return DashboardStats(
         total_deadlines=total_deadlines,
         pending_deadlines=pending_deadlines,
+        completed_deadlines=completed_deadlines,
         upcoming_reminders=upcoming_reminders,
         emails_processed_today=emails_today,
         connected_accounts=connected_accounts,

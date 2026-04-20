@@ -2,14 +2,15 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import get_current_user_id
 from app.database import get_db
+from app.models.deadline import Deadline
 from app.models.reminder import Reminder
-from app.schemas.reminder import ReminderRead, SnoozeRequest
+from app.schemas.reminder import ReminderCreate, ReminderPatch, ReminderRead, SnoozeRequest
 
 router = APIRouter(prefix="/reminders", tags=["reminders"])
 
@@ -30,6 +31,82 @@ async def list_reminders(
     result = await db.execute(stmt)
     reminders = result.scalars().all()
     return [ReminderRead.model_validate(r) for r in reminders]
+
+
+@router.post("", response_model=ReminderRead, status_code=status.HTTP_201_CREATED)
+async def create_reminder(
+    body: ReminderCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user_id: str = Depends(get_current_user_id),
+) -> ReminderRead:
+    """Create a custom reminder for a deadline."""
+    dl_result = await db.execute(
+        select(Deadline).where(
+            Deadline.id == body.deadline_id,
+            Deadline.user_id == uuid.UUID(current_user_id),
+        )
+    )
+    if not dl_result.scalar_one_or_none():
+        raise HTTPException(status_code=404, detail="Deadline not found")
+
+    reminder = Reminder(
+        deadline_id=body.deadline_id,
+        user_id=uuid.UUID(current_user_id),
+        scheduled_at=body.scheduled_at,
+        channel=body.channel,
+        status="pending",
+    )
+    db.add(reminder)
+    await db.commit()
+    await db.refresh(reminder)
+    return ReminderRead.model_validate(reminder)
+
+
+@router.patch("/{reminder_id}", response_model=ReminderRead)
+async def patch_reminder(
+    reminder_id: uuid.UUID,
+    body: ReminderPatch,
+    db: AsyncSession = Depends(get_db),
+    current_user_id: str = Depends(get_current_user_id),
+) -> ReminderRead:
+    """Update a reminder's scheduled time or channel."""
+    result = await db.execute(
+        select(Reminder).where(
+            Reminder.id == reminder_id,
+            Reminder.user_id == uuid.UUID(current_user_id),
+        )
+    )
+    reminder = result.scalar_one_or_none()
+    if not reminder:
+        raise HTTPException(status_code=404, detail="Reminder not found")
+
+    update_data = body.model_dump(exclude_unset=True)
+    for field, value in update_data.items():
+        setattr(reminder, field, value)
+
+    await db.commit()
+    await db.refresh(reminder)
+    return ReminderRead.model_validate(reminder)
+
+
+@router.post("/{reminder_id}/dismiss", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
+async def dismiss_reminder(
+    reminder_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user_id: str = Depends(get_current_user_id),
+) -> None:
+    """Dismiss/cancel a pending reminder."""
+    result = await db.execute(
+        select(Reminder).where(
+            Reminder.id == reminder_id,
+            Reminder.user_id == uuid.UUID(current_user_id),
+        )
+    )
+    reminder = result.scalar_one_or_none()
+    if not reminder:
+        raise HTTPException(status_code=404, detail="Reminder not found")
+    reminder.status = "dismissed"
+    await db.commit()
 
 
 @router.post("/{reminder_id}/snooze", response_model=ReminderRead)
