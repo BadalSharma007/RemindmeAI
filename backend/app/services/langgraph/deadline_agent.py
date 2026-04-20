@@ -15,6 +15,8 @@ import re
 from datetime import datetime, timezone
 from typing import Any, TypedDict
 
+import pytz
+
 from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.graph import StateGraph, END
 
@@ -224,19 +226,23 @@ confidence: 1.0=exact, 0.7=inferred, 0.4=vague"""
                 if not local_str:
                     continue
                 try:
-                    import dateparser
-                    parsed = dateparser.parse(
-                        local_str,
-                        settings={
-                            'TIMEZONE': user_tz,
-                            'RETURN_AS_TIMEZONE_AWARE': True,
-                            'TO_TIMEZONE': 'UTC',
-                            'PREFER_DATES_FROM': 'future',
-                        }
-                    )
-                    if parsed:
+                    # Parse the local datetime string Gemini returned
+                    # Try common formats: "2026-04-21 09:30" or "2026-04-21 09:30:00"
+                    local_dt = None
+                    for fmt in ('%Y-%m-%d %H:%M', '%Y-%m-%d %H:%M:%S', '%Y-%m-%dT%H:%M', '%Y-%m-%dT%H:%M:%S'):
+                        try:
+                            local_dt = datetime.strptime(local_str.strip(), fmt)
+                            break
+                        except ValueError:
+                            continue
+
+                    if local_dt:
+                        # Localize to user's timezone then convert to UTC
+                        local_tz_obj = pytz.timezone(user_tz)
+                        localized = local_tz_obj.localize(local_dt)
+                        utc_dt = localized.astimezone(pytz.UTC)
                         validated.append({
-                            'due_at': parsed.strftime('%Y-%m-%dT%H:%M:%SZ'),
+                            'due_at': utc_dt.strftime('%Y-%m-%dT%H:%M:%SZ'),
                             'confidence': float(d.get('confidence', 0.5)),
                             'source_text': d.get('source_text', ''),
                         })
