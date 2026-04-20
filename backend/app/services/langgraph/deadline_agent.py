@@ -28,6 +28,7 @@ class DeadlineState(TypedDict):
     subject: str
     snippet: str
     received_at: str               # ISO datetime string
+    user_timezone: str             # e.g. "Asia/Kolkata"
     is_deadline_related: bool
     raw_dates: list[str]           # date strings found by LLM
     resolved_deadlines: list[dict] # final output [{due_at, confidence, source_text}]
@@ -165,34 +166,52 @@ def resolve_dates_node(state: DeadlineState) -> DeadlineState:
         state['resolved_deadlines'] = []
         return state
 
-    llm = _get_llm()
-    prompt = f"""Convert these date/time expressions to absolute ISO 8601 UTC datetime strings.
+    user_tz = state.get('user_timezone') or 'Asia/Kolkata'
+    received_utc = datetime.fromisoformat(state['received_at'].replace('Z', '+00:00'))
 
-Reference time (email received): {state['received_at']}
+    # Convert reference time to user's local time so "today/tomorrow" resolves correctly
+    try:
+        import pytz
+        local_tz = pytz.timezone(user_tz)
+        received_local = received_utc.astimezone(local_tz)
+        local_date = received_local.strftime('%Y-%m-%d')
+        local_datetime = received_local.strftime('%Y-%m-%d %H:%M %Z')
+    except Exception:
+        local_date = received_utc.strftime('%Y-%m-%d')
+        local_datetime = received_utc.strftime('%Y-%m-%d %H:%M UTC')
+
+    llm = _get_llm()
+    prompt = f"""Convert these date/time expressions to LOCAL datetime strings in {user_tz} timezone.
+
+User's local time when email was received: {local_datetime}
+User's local date (today): {local_date}
+User timezone: {user_tz}
 Email subject: {state['subject']}
 Dates to convert: {json.dumps(state['raw_dates'])}
 
-Conversion rules:
-- "today at 8pm" → same date as reference, 20:00 UTC (adjust for IST: subtract 5:30)
-- "tonight" → same date as reference at 23:59 UTC
-- "tomorrow" → reference date + 1 day
-- "Monday at 3pm" → next Monday from reference at 15:00 UTC
-- "next week" → reference date + 7 days
-- "ASAP" → reference time + 2 hours
-- "end of month" → last day of reference month at 23:59 UTC
-- Missing year → use 2026
-- If date already passed → move to next occurrence
+IMPORTANT: Times in the email are in the user's LOCAL timezone ({user_tz}).
+DO NOT convert to UTC. Output local times only.
 
-Reply with ONLY a valid JSON array, no extra text:
+Rules:
+- "today at 4pm" → {local_date} 16:00
+- "tonight" → {local_date} 23:59
+- "tomorrow at 4pm" → tomorrow's date at 16:00
+- "Monday at 3pm" → next Monday at 15:00
+- "next week" → {local_date} + 7 days
+- "ASAP" → current time + 2 hours
+- Missing year → use current year
+- If no time given → use 23:59
+
+Reply with ONLY a valid JSON array:
 [
-  {{"due_at": "2026-04-19T14:30:00Z", "confidence": 0.95, "source_text": "today at 8pm"}},
+  {{"due_at_local": "2026-04-21 16:00", "confidence": 0.95, "source_text": "tomorrow at 4pm"}},
   ...
 ]
-confidence: 1.0=exact date, 0.7=inferred from context, 0.4=very vague"""
+confidence: 1.0=exact, 0.7=inferred, 0.4=vague"""
 
     try:
         response = llm.invoke([
-            SystemMessage(content="You are a date resolver. Always respond with valid JSON only."),
+            SystemMessage(content="You are a date resolver. Output local times only, not UTC. Always respond with valid JSON only."),
             HumanMessage(content=prompt),
         ])
         text = response.content.strip()
@@ -201,16 +220,28 @@ confidence: 1.0=exact date, 0.7=inferred from context, 0.4=very vague"""
             deadlines = json.loads(match.group())
             validated = []
             for d in deadlines:
-                if 'due_at' in d:
-                    try:
-                        datetime.fromisoformat(d['due_at'].replace('Z', '+00:00'))
+                local_str = d.get('due_at_local') or d.get('due_at', '')
+                if not local_str:
+                    continue
+                try:
+                    import dateparser
+                    parsed = dateparser.parse(
+                        local_str,
+                        settings={
+                            'TIMEZONE': user_tz,
+                            'RETURN_AS_TIMEZONE_AWARE': True,
+                            'TO_TIMEZONE': 'UTC',
+                            'PREFER_DATES_FROM': 'future',
+                        }
+                    )
+                    if parsed:
                         validated.append({
-                            'due_at': d['due_at'],
+                            'due_at': parsed.strftime('%Y-%m-%dT%H:%M:%SZ'),
                             'confidence': float(d.get('confidence', 0.5)),
                             'source_text': d.get('source_text', ''),
                         })
-                    except ValueError:
-                        pass
+                except Exception:
+                    pass
             state['resolved_deadlines'] = validated
         else:
             state['resolved_deadlines'] = []
@@ -266,6 +297,7 @@ def extract_deadlines_with_agent(
     subject: str,
     snippet: str,
     received_at: datetime,
+    user_timezone: str = "Asia/Kolkata",
 ) -> list[dict]:
     """
     Run the LangGraph deadline extraction agent.
@@ -282,6 +314,7 @@ def extract_deadlines_with_agent(
         'subject': subject or '',
         'snippet': snippet or '',
         'received_at': received_at.isoformat() if received_at else datetime.now(timezone.utc).isoformat(),
+        'user_timezone': user_timezone or 'Asia/Kolkata',
         'is_deadline_related': False,
         'raw_dates': [],
         'resolved_deadlines': [],
