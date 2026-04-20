@@ -160,7 +160,7 @@ async def _process_async(email_id: str) -> dict:
                     subject=email.subject or "",
                     snippet=email.snippet or "",
                     received_at=email.received_at or datetime.now(timezone.utc),
-                    user_timezone=user.timezone or "Asia/Kolkata",
+                    user_timezone=user.timezone if user.timezone and user.timezone != "UTC" else "Asia/Kolkata",
                 )
                 # Convert to same format as spaCy extractor
                 class _DL:
