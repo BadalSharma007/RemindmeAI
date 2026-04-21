@@ -28,23 +28,35 @@ AsyncSessionLocal = async_sessionmaker(
 )
 
 
+_celery_engine = None
+_celery_session_factory = None
+
+
 def make_session_factory():
-    """Create a fresh engine + session factory — used by Celery tasks to avoid
-    event-loop mismatch when asyncio.new_event_loop() is called per task."""
-    fresh_engine = create_async_engine(
-        settings.database_url,
-        echo=False,
-        pool_pre_ping=True,
-        pool_size=5,
-        max_overflow=10,
-    )
-    return async_sessionmaker(
-        fresh_engine,
-        class_=AsyncSession,
-        expire_on_commit=False,
-        autoflush=False,
-        autocommit=False,
-    )
+    """Return a cached engine + session factory for Celery tasks.
+
+    Cached so DNS is resolved once at first call, not on every task invocation.
+    A fresh DNS lookup on every task caused intermittent gaierror(-5) failures
+    when Docker's resolver couldn't reach Render's PostgreSQL hostname.
+    """
+    global _celery_engine, _celery_session_factory
+    if _celery_session_factory is None:
+        _celery_engine = create_async_engine(
+            settings.database_url,
+            echo=False,
+            pool_pre_ping=True,
+            pool_size=5,
+            max_overflow=10,
+            pool_recycle=300,  # recycle connections every 5 min
+        )
+        _celery_session_factory = async_sessionmaker(
+            _celery_engine,
+            class_=AsyncSession,
+            expire_on_commit=False,
+            autoflush=False,
+            autocommit=False,
+        )
+    return _celery_session_factory
 
 
 class Base(DeclarativeBase):
