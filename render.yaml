@@ -1,0 +1,29 @@
+services:
+  # FastAPI Web Service (already exists on Render — this syncs settings)
+  - type: web
+    name: RemindmeAI_API
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    envVars:
+      - fromGroup: remindmeai-env
+
+  # Celery Worker — processes NLP, polling, reminders
+  - type: worker
+    name: RemindmeAI_Worker
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    startCommand: celery -A app.core.celery_app.celery_app worker --loglevel=info --concurrency=2 --queues=celery,nlp,polling,reminders
+    envVars:
+      - fromGroup: remindmeai-env
+
+  # Celery Beat — fires scheduled tasks (poll Gmail, dispatch reminders)
+  - type: worker
+    name: RemindmeAI_Beat
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    startCommand: celery -A app.core.celery_app.celery_app beat --loglevel=info --scheduler celery.beat.PersistentScheduler --schedule /tmp/celerybeat-schedule
+    envVars:
+      - fromGroup: remindmeai-env
