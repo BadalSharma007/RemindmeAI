@@ -6,24 +6,10 @@ from datetime import datetime, timedelta, timezone
 
 import httpx
 
-import httpx
-
 from app.core.celery_app import celery_app
 from app.core.security import decrypt_token, encrypt_token
 
 logger = logging.getLogger(__name__)
-
-_http_client: httpx.AsyncClient | None = None
-
-
-def _get_http_client() -> httpx.AsyncClient:
-    global _http_client
-    if _http_client is None:
-        _http_client = httpx.AsyncClient(
-            timeout=30,
-            limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
-        )
-    return _http_client
 
 GMAIL_MESSAGES_URL = "https://gmail.googleapis.com/gmail/v1/users/me/messages"
 GMAIL_MESSAGE_URL = "https://gmail.googleapis.com/gmail/v1/users/me/messages/{id}"
@@ -59,29 +45,32 @@ async def _poll_all_async() -> dict:
 
     results = {"processed": 0, "errors": 0, "connections": 0}
 
-    async with AsyncSessionLocal() as db:
-        stmt = select(EmailConnection).where(
-            EmailConnection.is_active == True,
-            EmailConnection.provider == "gmail",
-        )
-        result = await db.execute(stmt)
-        connections = result.scalars().all()
-        results["connections"] = len(connections)
+    # Fresh client per task — avoids "Event loop is closed" when a singleton
+    # HTTPX client is reused across Celery fork workers with different event loops.
+    async with httpx.AsyncClient(timeout=30) as client:
+        async with AsyncSessionLocal() as db:
+            stmt = select(EmailConnection).where(
+                EmailConnection.is_active == True,
+                EmailConnection.provider == "gmail",
+            )
+            result = await db.execute(stmt)
+            connections = result.scalars().all()
+            results["connections"] = len(connections)
 
-        for conn in connections:
-            try:
-                count = await _poll_single_connection(db, conn)
-                results["processed"] += count
-            except Exception as exc:
-                logger.error(
-                    "Error polling connection %s: %s", conn.id, exc, exc_info=True
-                )
-                results["errors"] += 1
+            for conn in connections:
+                try:
+                    count = await _poll_single_connection(db, conn, client)
+                    results["processed"] += count
+                except Exception as exc:
+                    logger.error(
+                        "Error polling connection %s: %s", conn.id, exc, exc_info=True
+                    )
+                    results["errors"] += 1
 
     return results
 
 
-async def _poll_single_connection(db, connection) -> int:
+async def _poll_single_connection(db, connection, client: httpx.AsyncClient) -> int:
     """Poll Gmail for new messages. Saves emails and publishes to NLP event bus."""
     from sqlalchemy import select
     from app.models.extracted_email import ExtractedEmail
@@ -91,15 +80,14 @@ async def _poll_single_connection(db, connection) -> int:
 
     access_token = await _ensure_fresh_token(db, connection)
 
-    # Fetch important messages since last poll.
-    # Excludes Gmail's Promotions and Social tabs and the Spam folder so that
-    # marketing blasts and social-media pings never enter the NLP pipeline.
-    # Primary tab (university, bank, job) + Updates tab (OTPs, bills) are kept.
+    # Only fetch emails Gmail considers important — excludes promotions,
+    # social-media pings, and spam at the API level before any NLP runs.
+    # `is:important` uses Gmail's own trained ML (very accurate for established
+    # accounts). Adding `-category:promotions -category:social` as belt-and-suspenders
+    # catches any promotional emails that slipped past the importance filter.
     after_ts = connection.last_polled_at or (datetime.now(timezone.utc) - timedelta(days=7))
     after_epoch = int(after_ts.timestamp())
-    query = f"after:{after_epoch} -category:promotions -category:social -in:spam"
-
-    client = _get_http_client()
+    query = f"after:{after_epoch} is:important -category:promotions -category:social -in:spam"
     try:
         resp = await client.get(
             GMAIL_MESSAGES_URL,

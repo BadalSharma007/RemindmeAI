@@ -29,18 +29,6 @@ from app.core.security import decrypt_token, encrypt_token
 
 logger = logging.getLogger(__name__)
 
-_http_client: httpx.AsyncClient | None = None
-
-
-def _get_http_client() -> httpx.AsyncClient:
-    global _http_client
-    if _http_client is None:
-        _http_client = httpx.AsyncClient(
-            timeout=30,
-            limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
-        )
-    return _http_client
-
 _GRAPH_MESSAGES_URL = "https://graph.microsoft.com/v1.0/me/messages"
 _GRAPH_DELTA_URL = "https://graph.microsoft.com/v1.0/me/messages/delta"
 
@@ -74,29 +62,31 @@ async def _poll_all_async() -> dict:
 
     results = {"processed": 0, "errors": 0, "connections": 0}
 
-    async with AsyncSessionLocal() as db:
-        stmt = select(EmailConnection).where(
-            EmailConnection.is_active == True,
-            EmailConnection.provider == "outlook",
-        )
-        result = await db.execute(stmt)
-        connections = result.scalars().all()
-        results["connections"] = len(connections)
+    # Fresh client per task — avoids "Event loop is closed" across Celery forks.
+    async with httpx.AsyncClient(timeout=30) as client:
+        async with AsyncSessionLocal() as db:
+            stmt = select(EmailConnection).where(
+                EmailConnection.is_active == True,
+                EmailConnection.provider == "outlook",
+            )
+            result = await db.execute(stmt)
+            connections = result.scalars().all()
+            results["connections"] = len(connections)
 
-        for conn in connections:
-            try:
-                count = await _poll_single_connection(db, conn)
-                results["processed"] += count
-            except Exception as exc:
-                logger.error(
-                    "Error polling Outlook connection %s: %s", conn.id, exc, exc_info=True
-                )
-                results["errors"] += 1
+            for conn in connections:
+                try:
+                    count = await _poll_single_connection(db, conn, client)
+                    results["processed"] += count
+                except Exception as exc:
+                    logger.error(
+                        "Error polling Outlook connection %s: %s", conn.id, exc, exc_info=True
+                    )
+                    results["errors"] += 1
 
     return results
 
 
-async def _poll_single_connection(db, connection) -> int:
+async def _poll_single_connection(db, connection, client: httpx.AsyncClient) -> int:
     """Poll Microsoft Graph for new messages. Returns count of new emails saved."""
     from sqlalchemy import select
     from app.models.extracted_email import ExtractedEmail
@@ -113,7 +103,6 @@ async def _poll_single_connection(db, connection) -> int:
         "$orderby": "receivedDateTime desc",
     }
 
-    client = _get_http_client()
     resp = await client.get(
         url if "delta" in url else _GRAPH_MESSAGES_URL,
         headers={"Authorization": f"Bearer {access_token}"},
