@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import logging
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -15,7 +17,10 @@ from app.models.extracted_email import ExtractedEmail
 from app.models.reminder import Reminder
 from app.schemas.dashboard import DashboardStats
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/stats", tags=["stats"])
+
+_STATS_CACHE_TTL = 60  # seconds
 
 
 @router.get("/dashboard", response_model=DashboardStats)
@@ -23,29 +28,49 @@ async def get_dashboard_stats(
     db: AsyncSession = Depends(get_db),
     current_user_id: str = Depends(get_current_user_id),
 ) -> DashboardStats:
-    """Return aggregate statistics for the user's dashboard."""
+    """Return aggregate statistics for the user's dashboard. Cached in Redis for 60s."""
+    from app.config import settings
+    import redis as _redis
+
+    cache_key = f"stats:{current_user_id}"
+    try:
+        r = _redis.from_url(settings.redis_url, socket_connect_timeout=1)
+        cached = r.get(cache_key)
+        if cached:
+            return DashboardStats(**json.loads(cached))
+    except Exception:
+        pass  # Redis unavailable — compute fresh
+
+    stats = await _compute_dashboard_stats(db, current_user_id)
+
+    try:
+        r = _redis.from_url(settings.redis_url, socket_connect_timeout=1)
+        r.setex(cache_key, _STATS_CACHE_TTL, json.dumps(stats.model_dump(), default=str))
+    except Exception:
+        pass  # Cache write failure is non-fatal
+
+    return stats
+
+
+async def _compute_dashboard_stats(db: AsyncSession, current_user_id: str) -> DashboardStats:
     uid = uuid.UUID(current_user_id)
     today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
 
-    # Total deadlines
     total_result = await db.execute(
         select(func.count()).where(Deadline.user_id == uid)
     )
     total_deadlines = total_result.scalar() or 0
 
-    # Pending deadlines
     pending_result = await db.execute(
         select(func.count()).where(Deadline.user_id == uid, Deadline.status == "pending")
     )
     pending_deadlines = pending_result.scalar() or 0
 
-    # Completed deadlines
     completed_result = await db.execute(
         select(func.count()).where(Deadline.user_id == uid, Deadline.status == "completed")
     )
     completed_deadlines = completed_result.scalar() or 0
 
-    # Upcoming reminders (next 24h, pending)
     upcoming_result = await db.execute(
         select(func.count()).where(
             Reminder.user_id == uid,
@@ -55,7 +80,6 @@ async def get_dashboard_stats(
     )
     upcoming_reminders = upcoming_result.scalar() or 0
 
-    # Emails processed today
     processed_result = await db.execute(
         select(func.count())
         .select_from(ExtractedEmail)
@@ -67,7 +91,6 @@ async def get_dashboard_stats(
     )
     emails_today = processed_result.scalar() or 0
 
-    # Connected accounts
     accounts_result = await db.execute(
         select(func.count()).where(
             EmailConnection.user_id == uid,

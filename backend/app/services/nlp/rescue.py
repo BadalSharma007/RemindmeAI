@@ -30,10 +30,18 @@ def _run(coro):
 def _register_rescue_task():
     from app.core.celery_app import celery_app
 
-    @celery_app.task(name="app.services.nlp.rescue.rescue_orphaned_emails")
-    def rescue_orphaned_emails() -> dict:
+    @celery_app.task(
+        name="app.services.nlp.rescue.rescue_orphaned_emails",
+        bind=True,
+        max_retries=2,
+    )
+    def rescue_orphaned_emails(self) -> dict:
         """Find and re-queue orphaned emails."""
-        return _run(_rescue_async())
+        try:
+            return _run(_rescue_async())
+        except Exception as exc:
+            logger.error("Rescue task failed: %s", exc, exc_info=True)
+            raise self.retry(exc=exc, countdown=60)
 
     return rescue_orphaned_emails
 

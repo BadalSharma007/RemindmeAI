@@ -52,6 +52,7 @@ def _register_task():
         max_retries=3,
         default_retry_delay=60,
         queue="nlp",
+        rate_limit="20/m",
     )
     def process_email_nlp(self, email_id: str) -> dict:
         """Process a single ExtractedEmail through the full NLP pipeline.
@@ -69,7 +70,8 @@ def _register_task():
             return _run(_process_async(email_id))
         except Exception as exc:
             logger.error("NLP processing failed for email %s: %s", email_id, exc, exc_info=True)
-            raise self.retry(exc=exc)
+            # Exponential backoff: 60s, 120s, 240s
+            raise self.retry(exc=exc, countdown=60 * (2 ** self.request.retries))
 
     return process_email_nlp
 
@@ -81,6 +83,20 @@ process_email_nlp = _register_task()
 # ---------------------------------------------------------------------------
 # Async implementation
 # ---------------------------------------------------------------------------
+
+def _calibrate_confidence(deadline_dict: dict, subject: str, snippet: str) -> float:
+    base = float(deadline_dict.get('confidence', 0.5))
+    text = (deadline_dict.get('source_text') or '').lower()
+    combined = (subject + ' ' + snippet).lower()
+    action_verbs = ['submit', 'due', 'deadline', 'by', 'before', 'last date', 'pay',
+                    'register', 'apply', 'attend', 'complete', 'upload', 'report']
+    has_action = any(v in text or v in combined for v in action_verbs)
+    if has_action and base >= 0.7:
+        return min(base * 1.05, 1.0)
+    if not has_action and base < 0.8:
+        return base * 0.9
+    return base
+
 
 async def _process_async(email_id: str) -> dict:
     from sqlalchemy import select
@@ -164,12 +180,20 @@ async def _process_async(email_id: str) -> dict:
                 user_timezone=user.timezone if user.timezone and user.timezone != "UTC" else "Asia/Kolkata",
             )
             class _DL:
-                def __init__(self, d):
+                def __init__(self, d, calibrated_confidence: float):
                     self.due_at = d['due_at']
-                    self.confidence = d['confidence']
+                    self.confidence = calibrated_confidence
                     self.source_text = d['source_text']
-            raw_deadlines = [_DL(d) for d in agent_results]
-            logger.info("Gemini extracted %d deadlines for email %s", len(raw_deadlines), email_id)
+
+            calibrated = []
+            for d in agent_results:
+                cal_conf = _calibrate_confidence(d, email.subject or "", email.snippet or "")
+                if cal_conf >= 0.6:
+                    calibrated.append(_DL(d, cal_conf))
+                else:
+                    logger.debug("Skipping low-confidence deadline (%.2f): %s", cal_conf, d.get('source_text'))
+            raw_deadlines = calibrated
+            logger.info("Gemini extracted %d deadlines (after calibration) for email %s", len(raw_deadlines), email_id)
         except Exception as lg_exc:
             logger.error("Gemini extraction failed for email %s: %s — releasing for rescue", email_id, lg_exc)
             # Un-claim so the rescue task can re-queue this email
@@ -190,6 +214,16 @@ async def _process_async(email_id: str) -> dict:
             pass
 
         for dl in raw_deadlines:
+            now_utc = datetime.now(timezone.utc)
+            # Skip deadlines already in the past
+            if dl.due_at < now_utc:
+                logger.info("Skipping past deadline %s for email %s", dl.due_at, email_id)
+                continue
+            # Skip suspiciously far-future deadlines (> 2 years)
+            if dl.due_at > now_utc + timedelta(days=730):
+                logger.warning("Skipping far-future deadline %s for email %s", dl.due_at, email_id)
+                continue
+
             # 4. Create Deadline row — skip if already exists for this email + due_at
             existing_dl = await db.execute(
                 select(Deadline).where(

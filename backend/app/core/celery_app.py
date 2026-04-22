@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from celery import Celery
 from celery.schedules import crontab
+from kombu import Queue
 
 from app.config import settings
 
@@ -28,9 +29,21 @@ celery_app.conf.update(
     task_acks_late=True,
     task_reject_on_worker_lost=True,
     worker_prefetch_multiplier=1,
-    # Phase 3: route NLP tasks to the dedicated nlp queue
+    # Priority queues: reminders dispatched first, then NLP, then polling
+    task_queues=[
+        Queue("reminders", queue_arguments={"x-max-priority": 10}),
+        Queue("nlp", queue_arguments={"x-max-priority": 10}),
+        Queue("polling"),
+        Queue("celery"),
+    ],
+    task_default_priority=5,
     task_routes={
+        "app.services.reminders.dispatcher.dispatch_due_reminders": {"queue": "reminders"},
         "app.services.nlp.processor.process_email_nlp": {"queue": "nlp"},
+        "app.services.ingestion.gmail_poller.poll_all_gmail_connections": {"queue": "polling"},
+        "app.services.ingestion.outlook_poller.poll_all_outlook_connections": {"queue": "polling"},
+        "app.services.nlp.rescue.rescue_orphaned_emails": {"queue": "celery"},
+        "app.services.maintenance.data_retention.purge_old_data": {"queue": "celery"},
     },
 )
 

@@ -9,17 +9,24 @@ from app.core.celery_app import celery_app
 logger = logging.getLogger(__name__)
 
 
-@celery_app.task(name="app.services.reminders.dispatcher.dispatch_due_reminders")
-def dispatch_due_reminders() -> dict:
+@celery_app.task(
+    name="app.services.reminders.dispatcher.dispatch_due_reminders",
+    bind=True,
+    max_retries=2,
+)
+def dispatch_due_reminders(self) -> dict:
     """
     Celery Beat task (every 30s).
-    Pulls due reminders from Redis sorted set, dispatches to notification channels,
-    and marks them as sent in both Redis and PostgreSQL.
+    Pulls due reminders from Redis sorted set (with PostgreSQL fallback),
+    dispatches to notification channels, and marks them as sent.
     """
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
         return loop.run_until_complete(_dispatch_async())
+    except Exception as exc:
+        logger.error("Dispatcher task failed: %s", exc, exc_info=True)
+        raise self.retry(exc=exc, countdown=30)
     finally:
         loop.close()
 
@@ -36,11 +43,32 @@ async def _dispatch_async() -> dict:
     from app.services.reminders.scheduler import ReminderScheduler
     from app.services.notifications.email_sender import SESEmailSender
 
-    r = redis_lib.from_url(settings.redis_url)
-    scheduler = ReminderScheduler(r)
     now = datetime.now(timezone.utc)
 
-    due_ids = scheduler.get_due(now=now, batch_size=100)
+    # Fast path: pull due reminder IDs from Redis sorted set
+    due_ids: list[str] = []
+    scheduler: ReminderScheduler | None = None
+    try:
+        r = redis_lib.from_url(settings.redis_url)
+        scheduler = ReminderScheduler(r)
+        due_ids = scheduler.get_due(now=now, batch_size=100)
+    except Exception as redis_exc:
+        logger.warning("Redis unavailable in dispatcher: %s — falling back to DB", redis_exc)
+
+    # PostgreSQL fallback: query pending reminders directly if Redis returned nothing
+    if not due_ids:
+        async with AsyncSessionLocal() as db_fallback:
+            fallback_stmt = (
+                select(Reminder)
+                .where(Reminder.status == "pending", Reminder.scheduled_at <= now)
+                .limit(100)
+            )
+            fallback_rows = await db_fallback.execute(fallback_stmt)
+            fallback_reminders = fallback_rows.scalars().all()
+            due_ids = [str(rem.id) for rem in fallback_reminders]
+            if due_ids:
+                logger.info("Redis fallback: found %d due reminders in PostgreSQL", len(due_ids))
+
     if not due_ids:
         return {"dispatched": 0, "failed": 0}
 
@@ -103,8 +131,12 @@ async def _dispatch_async() -> dict:
 
         await db.commit()
 
-    # Remove from Redis sorted set
-    scheduler.mark_processed(processed_ids)
+    # Remove from Redis sorted set (best-effort — may be None if Redis was down)
+    if scheduler is not None:
+        try:
+            scheduler.mark_processed(processed_ids)
+        except Exception as exc:
+            logger.warning("Failed to remove reminders from Redis sorted set: %s", exc)
 
     logger.info("Dispatcher: dispatched=%d failed=%d", dispatched, failed)
     return {"dispatched": dispatched, "failed": failed}

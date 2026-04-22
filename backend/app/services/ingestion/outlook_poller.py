@@ -29,6 +29,18 @@ from app.core.security import decrypt_token, encrypt_token
 
 logger = logging.getLogger(__name__)
 
+_http_client: httpx.AsyncClient | None = None
+
+
+def _get_http_client() -> httpx.AsyncClient:
+    global _http_client
+    if _http_client is None:
+        _http_client = httpx.AsyncClient(
+            timeout=30,
+            limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
+        )
+    return _http_client
+
 _GRAPH_MESSAGES_URL = "https://graph.microsoft.com/v1.0/me/messages"
 _GRAPH_DELTA_URL = "https://graph.microsoft.com/v1.0/me/messages/delta"
 
@@ -36,13 +48,20 @@ _GRAPH_DELTA_URL = "https://graph.microsoft.com/v1.0/me/messages/delta"
 _SELECT_FIELDS = "id,subject,from,receivedDateTime,bodyPreview,internetMessageHeaders"
 
 
-@celery_app.task(name="app.services.ingestion.outlook_poller.poll_all_outlook_connections")
-def poll_all_outlook_connections() -> dict:
-    """Celery Beat task (every 5 min). Polls all active Outlook connections."""
+@celery_app.task(
+    name="app.services.ingestion.outlook_poller.poll_all_outlook_connections",
+    bind=True,
+    max_retries=2,
+)
+def poll_all_outlook_connections(self) -> dict:
+    """Celery Beat task (every 1 min). Polls all active Outlook connections."""
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
         return loop.run_until_complete(_poll_all_async())
+    except Exception as exc:
+        logger.error("Outlook poll task failed: %s", exc, exc_info=True)
+        raise self.retry(exc=exc, countdown=30 * (2 ** self.request.retries))
     finally:
         loop.close()
 
@@ -94,14 +113,14 @@ async def _poll_single_connection(db, connection) -> int:
         "$orderby": "receivedDateTime desc",
     }
 
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        resp = await client.get(
-            url if "delta" in url else _GRAPH_MESSAGES_URL,
-            headers={"Authorization": f"Bearer {access_token}"},
-            params=params if not connection.history_id else {},
-        )
-        resp.raise_for_status()
-        data = resp.json()
+    client = _get_http_client()
+    resp = await client.get(
+        url if "delta" in url else _GRAPH_MESSAGES_URL,
+        headers={"Authorization": f"Bearer {access_token}"},
+        params=params if not connection.history_id else {},
+    )
+    resp.raise_for_status()
+    data = resp.json()
 
     messages = data.get("value", [])
 
@@ -165,9 +184,14 @@ async def _poll_single_connection(db, connection) -> int:
 
 
 async def _ensure_fresh_token(db, connection) -> str:
-    """Decrypt and refresh the Outlook access token if near expiry."""
+    """Decrypt and refresh the Outlook access token if near expiry.
+    Uses a Redis distributed lock to prevent concurrent workers from
+    both calling Microsoft's token endpoint with the same refresh token.
+    """
     from datetime import timedelta
     from app.services.oauth.outlook import outlook_oauth_client
+    import redis as _redis
+    from app.config import settings as _cfg
 
     if outlook_oauth_client is None:
         raise RuntimeError("Outlook OAuth client is not configured.")
@@ -181,13 +205,35 @@ async def _ensure_fresh_token(db, connection) -> str:
         or connection.token_expiry <= now + timedelta(minutes=5)
     )
 
-    if expires_soon:
-        tokens = await outlook_oauth_client.refresh_access_token(refresh_token)
-        connection.access_token_enc = encrypt_token(tokens.access_token)
-        connection.token_expiry = tokens.expires_at
-        if tokens.refresh_token:
-            connection.refresh_token_enc = encrypt_token(tokens.refresh_token)
-        await db.commit()
-        access_token = tokens.access_token
+    if not expires_soon:
+        return access_token
 
-    return access_token
+    r = _redis.from_url(_cfg.redis_url)
+    lock_key = f"token_refresh:{connection.id}"
+    lock = r.lock(lock_key, timeout=30, blocking_timeout=25)
+    acquired = lock.acquire(blocking=True)
+    if acquired:
+        try:
+            await db.refresh(connection)
+            now2 = datetime.now(timezone.utc)
+            if (
+                connection.token_expiry is not None
+                and connection.token_expiry > now2 + timedelta(minutes=5)
+            ):
+                return decrypt_token(connection.access_token_enc)
+
+            tokens = await outlook_oauth_client.refresh_access_token(refresh_token)
+            connection.access_token_enc = encrypt_token(tokens.access_token)
+            connection.token_expiry = tokens.expires_at
+            if tokens.refresh_token:
+                connection.refresh_token_enc = encrypt_token(tokens.refresh_token)
+            await db.commit()
+            return tokens.access_token
+        finally:
+            try:
+                lock.release()
+            except Exception:
+                pass
+    else:
+        await db.refresh(connection)
+        return decrypt_token(connection.access_token_enc)

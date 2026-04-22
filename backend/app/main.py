@@ -86,9 +86,14 @@ def create_app() -> FastAPI:
     async def health_check() -> dict:
         return {"status": "ok", "service": settings.app_name, "version": "4.0.0"}
 
+    @app.get("/health/live", tags=["ops"])
+    async def liveness_check() -> dict:
+        """Kubernetes liveness probe — is the process alive?"""
+        return {"status": "ok"}
+
     @app.get("/health/ready", tags=["ops"])
     async def readiness_check() -> dict:
-        """Deep readiness check: DB + Redis connectivity."""
+        """Deep readiness check: DB + Redis + RabbitMQ connectivity."""
         checks: dict[str, str] = {}
 
         try:
@@ -108,7 +113,21 @@ def create_app() -> FastAPI:
         except Exception as exc:
             checks["redis"] = f"error: {exc}"
 
-        all_ok = all(v == "ok" for v in checks.values())
+        try:
+            import pika
+            broker_url = settings.rabbitmq_url or settings.celery_broker_url
+            if broker_url.startswith("amqp"):
+                params = pika.URLParameters(broker_url)
+                params.socket_timeout = 2
+                conn = pika.BlockingConnection(params)
+                conn.close()
+                checks["rabbitmq"] = "ok"
+            else:
+                checks["rabbitmq"] = "skipped (redis broker)"
+        except Exception as exc:
+            checks["rabbitmq"] = f"error: {exc}"
+
+        all_ok = all(v in ("ok", "skipped (redis broker)") for v in checks.values())
         status_code = 200 if all_ok else 503
         return JSONResponse(
             content={"status": "ready" if all_ok else "degraded", "checks": checks},

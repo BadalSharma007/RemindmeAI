@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { Routes, Route, Navigate, useNavigate, useSearchParams } from "react-router-dom";
 import { Layout } from "./components/shared/Layout";
 import { ProtectedRoute } from "./components/shared/ProtectedRoute";
+import { ErrorBoundary } from "./components/shared/ErrorBoundary";
 import { Dashboard } from "./components/Dashboard";
 import { Deadlines } from "./components/Deadlines";
 import { Reminders } from "./components/Reminders";
@@ -131,25 +132,29 @@ function AuthCallbackPage() {
    ──────────────────────────────────────────────────────────────────── */
 export default function App() {
   return (
-    <Routes>
-      <Route path="/login" element={<LoginPage />} />
-      <Route path="/auth/callback" element={<AuthCallbackPage />} />
-      <Route
-        path="/*"
-        element={
-          <ProtectedRoute>
-            <Layout>
-              <Routes>
-                <Route path="/" element={<Dashboard />} />
-                <Route path="/deadlines" element={<Deadlines />} />
-                <Route path="/reminders" element={<Reminders />} />
-                <Route path="/settings" element={<Settings />} />
-                <Route path="*" element={<Navigate to="/" replace />} />
-              </Routes>
-            </Layout>
-          </ProtectedRoute>
-        }
-      />
-    </Routes>
+    <ErrorBoundary>
+      <Routes>
+        <Route path="/login" element={<LoginPage />} />
+        <Route path="/auth/callback" element={<AuthCallbackPage />} />
+        <Route
+          path="/*"
+          element={
+            <ProtectedRoute>
+              <Layout>
+                <ErrorBoundary>
+                  <Routes>
+                    <Route path="/" element={<Dashboard />} />
+                    <Route path="/deadlines" element={<Deadlines />} />
+                    <Route path="/reminders" element={<Reminders />} />
+                    <Route path="/settings" element={<Settings />} />
+                    <Route path="*" element={<Navigate to="/" replace />} />
+                  </Routes>
+                </ErrorBoundary>
+              </Layout>
+            </ProtectedRoute>
+          }
+        />
+      </Routes>
+    </ErrorBoundary>
   );
 }

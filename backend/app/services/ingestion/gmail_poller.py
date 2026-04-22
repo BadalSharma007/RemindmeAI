@@ -6,19 +6,37 @@ from datetime import datetime, timedelta, timezone
 
 import httpx
 
+import httpx
+
 from app.core.celery_app import celery_app
 from app.core.security import decrypt_token, encrypt_token
 
 logger = logging.getLogger(__name__)
 
+_http_client: httpx.AsyncClient | None = None
+
+
+def _get_http_client() -> httpx.AsyncClient:
+    global _http_client
+    if _http_client is None:
+        _http_client = httpx.AsyncClient(
+            timeout=30,
+            limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
+        )
+    return _http_client
+
 GMAIL_MESSAGES_URL = "https://gmail.googleapis.com/gmail/v1/users/me/messages"
 GMAIL_MESSAGE_URL = "https://gmail.googleapis.com/gmail/v1/users/me/messages/{id}"
 
 
-@celery_app.task(name="app.services.ingestion.gmail_poller.poll_all_gmail_connections")
-def poll_all_gmail_connections() -> dict:
+@celery_app.task(
+    name="app.services.ingestion.gmail_poller.poll_all_gmail_connections",
+    bind=True,
+    max_retries=2,
+)
+def poll_all_gmail_connections(self) -> dict:
     """
-    Celery Beat task (every 5 min).
+    Celery Beat task (every 1 min).
     Fetches all active Gmail connections and polls each for new messages.
     Returns a summary of results.
     """
@@ -26,6 +44,9 @@ def poll_all_gmail_connections() -> dict:
     asyncio.set_event_loop(loop)
     try:
         return loop.run_until_complete(_poll_all_async())
+    except Exception as exc:
+        logger.error("Gmail poll task failed: %s", exc, exc_info=True)
+        raise self.retry(exc=exc, countdown=30 * (2 ** self.request.retries))
     finally:
         loop.close()
 
@@ -75,29 +96,28 @@ async def _poll_single_connection(db, connection) -> int:
     after_epoch = int(after_ts.timestamp())
     query = f"after:{after_epoch}"
 
+    client = _get_http_client()
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.get(
-                GMAIL_MESSAGES_URL,
-                headers={"Authorization": f"Bearer {access_token}"},
-                params={"maxResults": 50, "q": query},
-            )
-            resp.raise_for_status()
-            messages = resp.json().get("messages", [])
+        resp = await client.get(
+            GMAIL_MESSAGES_URL,
+            headers={"Authorization": f"Bearer {access_token}"},
+            params={"maxResults": 50, "q": query},
+        )
+        resp.raise_for_status()
+        messages = resp.json().get("messages", [])
     except httpx.HTTPStatusError as exc:
         if exc.response.status_code in (401, 403):
             logger.warning("Gmail auth error for connection %s — attempting token refresh", connection.id)
             try:
                 access_token = await _ensure_fresh_token(db, connection)
                 # Retry the list request once after refresh
-                async with httpx.AsyncClient(timeout=30.0) as client:
-                    resp = await client.get(
-                        GMAIL_MESSAGES_URL,
-                        headers={"Authorization": f"Bearer {access_token}"},
-                        params={"maxResults": 50, "q": query},
-                    )
-                    resp.raise_for_status()
-                    messages = resp.json().get("messages", [])
+                resp = await client.get(
+                    GMAIL_MESSAGES_URL,
+                    headers={"Authorization": f"Bearer {access_token}"},
+                    params={"maxResults": 50, "q": query},
+                )
+                resp.raise_for_status()
+                messages = resp.json().get("messages", [])
             except Exception as refresh_exc:
                 logger.error("Token refresh failed for connection %s: %s", connection.id, refresh_exc)
                 # Only disable after persistent failures — not on first error
@@ -122,15 +142,14 @@ async def _poll_single_connection(db, connection) -> int:
             continue
 
         # Fetch full message metadata
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.get(
-                GMAIL_MESSAGE_URL.format(id=message_id),
-                headers={"Authorization": f"Bearer {access_token}"},
-                params={"format": "metadata", "metadataHeaders": ["Subject", "From", "Date", "List-Unsubscribe", "Precedence"]},
-            )
-            if resp.status_code != 200:
-                continue
-            raw = resp.json()
+        resp = await client.get(
+            GMAIL_MESSAGE_URL.format(id=message_id),
+            headers={"Authorization": f"Bearer {access_token}"},
+            params={"format": "metadata", "metadataHeaders": ["Subject", "From", "Date", "List-Unsubscribe", "Precedence"]},
+        )
+        if resp.status_code != 200:
+            continue
+        raw = resp.json()
 
         metadata = extract_email_metadata(raw)
 
@@ -170,10 +189,13 @@ async def _poll_single_connection(db, connection) -> int:
 async def _ensure_fresh_token(db, connection) -> str:
     """
     Decrypt the stored access token. If it expires within 5 minutes,
-    refresh it and re-encrypt+save. Returns the plaintext access token.
-    This is the ONLY place in the codebase that handles plaintext OAuth tokens.
+    refresh it under a Redis distributed lock so only one worker calls
+    Google's token endpoint at a time (prevents invalid_grant from
+    competing workers both consuming the same refresh token).
     """
     from app.services.oauth.gmail import gmail_oauth_client
+    import redis as _redis
+    from app.config import settings as _cfg
 
     access_token = decrypt_token(connection.access_token_enc)
     refresh_token = decrypt_token(connection.refresh_token_enc)
@@ -184,13 +206,37 @@ async def _ensure_fresh_token(db, connection) -> str:
         or connection.token_expiry <= now + timedelta(minutes=5)
     )
 
-    if expires_soon:
-        tokens = await gmail_oauth_client.refresh_access_token(refresh_token)
-        connection.access_token_enc = encrypt_token(tokens.access_token)
-        connection.token_expiry = tokens.expires_at
-        if tokens.refresh_token:
-            connection.refresh_token_enc = encrypt_token(tokens.refresh_token)
-        await db.commit()
-        access_token = tokens.access_token
+    if not expires_soon:
+        return access_token
 
-    return access_token
+    r = _redis.from_url(_cfg.redis_url)
+    lock_key = f"token_refresh:{connection.id}"
+    lock = r.lock(lock_key, timeout=30, blocking_timeout=25)
+    acquired = lock.acquire(blocking=True)
+    if acquired:
+        try:
+            # Re-read from DB — another worker may have refreshed while we waited
+            await db.refresh(connection)
+            now2 = datetime.now(timezone.utc)
+            if (
+                connection.token_expiry is not None
+                and connection.token_expiry > now2 + timedelta(minutes=5)
+            ):
+                return decrypt_token(connection.access_token_enc)
+
+            tokens = await gmail_oauth_client.refresh_access_token(refresh_token)
+            connection.access_token_enc = encrypt_token(tokens.access_token)
+            connection.token_expiry = tokens.expires_at
+            if tokens.refresh_token:
+                connection.refresh_token_enc = encrypt_token(tokens.refresh_token)
+            await db.commit()
+            return tokens.access_token
+        finally:
+            try:
+                lock.release()
+            except Exception:
+                pass
+    else:
+        # Lock timed out — another worker is refreshing; re-read DB token
+        await db.refresh(connection)
+        return decrypt_token(connection.access_token_enc)

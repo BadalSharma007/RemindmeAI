@@ -104,6 +104,19 @@ if _PROMETHEUS_AVAILABLE:
         buckets=(0.1, 0.5, 1.0, 2.5, 5.0, 15.0, 30.0, 60.0),
     )
 
+    GEMINI_CALLS = Counter(
+        "remindme_gemini_api_calls_total",
+        "Gemini API calls made by the LangGraph agent",
+        ["node", "status"],  # node: classify|extract_dates|resolve_dates, status: success|error|rate_limited
+    )
+
+    GEMINI_LATENCY = Histogram(
+        "remindme_gemini_api_latency_seconds",
+        "Gemini API response time per node",
+        ["node"],
+        buckets=(0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 30.0),
+    )
+
 
 # ---------------------------------------------------------------------------
 # Public helpers — safe to call whether or not prometheus_client is installed
@@ -142,6 +155,16 @@ def inc_circuit_open(name: str) -> None:
 def observe_nlp_duration(seconds: float) -> None:
     if _PROMETHEUS_AVAILABLE:
         NLP_PROCESSING_DURATION.observe(seconds)
+
+
+def inc_gemini_call(node: str, status: str = "success") -> None:
+    if _PROMETHEUS_AVAILABLE:
+        GEMINI_CALLS.labels(node=node, status=status).inc()
+
+
+def observe_gemini_latency(node: str, seconds: float) -> None:
+    if _PROMETHEUS_AVAILABLE:
+        GEMINI_LATENCY.labels(node=node).observe(seconds)
 
 
 # ---------------------------------------------------------------------------

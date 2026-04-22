@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import re
+import time
 from datetime import datetime, timezone
 from typing import Any, TypedDict
 
@@ -60,32 +61,36 @@ def _get_llm():
 
 def classify_node(state: DeadlineState) -> DeadlineState:
     llm = _get_llm()
-    prompt = f"""Analyze this email. Is it important or does it require any action?
+    prompt = f"""You classify emails for an Indian student or professional. Be INCLUSIVE — when in doubt, return true.
 
 Subject: {state['subject']}
 Body: {state['snippet']}
 
-Return true if the email is important or requires action. Examples:
-- Has a date, time, or deadline
-- Requires a reply or response
-- Contains an offer, opportunity, or invitation
-- Is from a college, bank, company, or official source
-- Mentions money, payment, fees, or billing
-- Contains an OTP, verification, or security alert
-- Is about a job, internship, or interview
-- Has any instructions or tasks to complete
-- Contains news or updates that matter
+Mark as action-required (is_deadline_related: true) for ANY of these:
+- University/college deadlines (assignment submission, exam, registration, attendance, fees)
+- Government/institutional notices (AICTE, UGC, scholarship, government scheme deadlines)
+- Internship or job application deadlines
+- Payment dues (fees, EMI, invoices, billing, bank alerts, loan)
+- Meeting or event invites (webinar, interview, viva, seminar, workshop)
+- OTP, verification, security alert emails (time-sensitive)
+- Emails with words: "last date", "submit by", "due by", "before", "deadline", "expiry", "apply by"
+- Any action verb with a date/time
+- Important official communication from any institution or company
 
-Only return false for clearly unimportant emails like promotional ads, newsletters, or spam.
+Only return false for: pure promotional discount ads, social media like/follow notifications, newsletter digests with no deadlines.
 
 Reply with ONLY valid JSON:
-{{"is_deadline_related": true, "reason": "brief reason"}}"""
+{{"is_deadline_related": true, "reason": "brief reason", "category": "deadline|meeting|payment|task|info"}}"""
 
     try:
+        from app.core.metrics import inc_gemini_call, observe_gemini_latency
+        _t0 = time.perf_counter()
         response = llm.invoke([
-            SystemMessage(content="You find important emails that need attention. Be very inclusive — when in doubt return true. Only exclude obvious spam and ads. Respond with valid JSON only."),
+            SystemMessage(content="You identify important emails for Indian students and professionals. Be very inclusive — only exclude obvious spam and promotional ads. Respond with valid JSON only."),
             HumanMessage(content=prompt),
         ])
+        observe_gemini_latency("classify", time.perf_counter() - _t0)
+        inc_gemini_call("classify", "success")
         text = response.content.strip()
         # Extract JSON even if model adds extra text
         match = re.search(r'\{.*\}', text, re.DOTALL)
@@ -95,6 +100,19 @@ Reply with ONLY valid JSON:
         else:
             state['is_deadline_related'] = False
     except Exception as exc:
+        exc_str = str(exc)
+        if "429" in exc_str or "quota" in exc_str.lower() or "rate" in exc_str.lower():
+            try:
+                from app.core.metrics import inc_gemini_call
+                inc_gemini_call("classify", "rate_limited")
+            except Exception:
+                pass
+            raise  # Bubble up so Celery task retries with exponential backoff
+        try:
+            from app.core.metrics import inc_gemini_call
+            inc_gemini_call("classify", "error")
+        except Exception:
+            pass
         logger.warning("LangGraph classify_node error: %s", exc)
         state['is_deadline_related'] = False
 
@@ -111,17 +129,23 @@ def extract_dates_node(state: DeadlineState) -> DeadlineState:
         return state
 
     llm = _get_llm()
-    prompt = f"""Extract ALL dates and times from this email that relate to any action, meeting, deadline, or event.
+    prompt = f"""Extract ALL temporal expressions from this email that relate to any action, deadline, meeting, or event.
 
 Subject: {state['subject']}
 Body: {state['snippet']}
 Email received at: {state['received_at']}
 
 Extract dates for:
-- Deadlines: "submit by April 30", "due today at 8pm"
-- Meetings: "meeting on Monday at 3pm", "call scheduled for tomorrow"
-- Events: "webinar on Friday", "exam on 25th April"
-- Payments: "pay by 30th", "invoice due next week"
+- Deadlines: "submit by April 30", "due today at 8pm", "last date of submission"
+- Meetings: "meeting on Monday at 3pm", "call scheduled for tomorrow", "viva scheduled for"
+- Events: "webinar on Friday", "exam on 25th April", "report by"
+- Payments: "pay by 30th", "invoice due next week", "billing date", "due by", "pay before"
+- Academic: "exam on", "last date", "report submission", "assignment due"
+
+Indian date formats to recognize:
+- DD/MM/YYYY, DD-MM-YYYY (e.g. 30/04/2026, 30-04-2026)
+- "5th Jan", "January 5", "5 January 2026"
+- "before 15th", "by end of month", "before EOD"
 
 Time resolution rules:
 - "today" = {state['received_at'][:10]}
@@ -129,16 +153,21 @@ Time resolution rules:
 - "tomorrow" = next day
 - "next week" = 7 days from received_at
 - "ASAP" = received_at + 2 hours
+- "EOD" = today at 18:00, "EOW" = this Friday at 18:00, "EOM" = last day of month
 - Always include the time if mentioned
 
 Reply with ONLY valid JSON:
 {{"dates": ["today at 8pm", "Monday April 21 at 3pm"], "needs_clarification": false}}"""
 
     try:
+        from app.core.metrics import inc_gemini_call, observe_gemini_latency
+        _t0 = time.perf_counter()
         response = llm.invoke([
-            SystemMessage(content="You are a precise date extractor. Always respond with valid JSON only."),
+            SystemMessage(content="You are a precise date extractor for Indian academic and professional emails. Always respond with valid JSON only."),
             HumanMessage(content=prompt),
         ])
+        observe_gemini_latency("extract_dates", time.perf_counter() - _t0)
+        inc_gemini_call("extract_dates", "success")
         text = response.content.strip()
         match = re.search(r'\{.*\}', text, re.DOTALL)
         if match:
@@ -148,6 +177,19 @@ Reply with ONLY valid JSON:
         else:
             state['raw_dates'] = []
     except Exception as exc:
+        exc_str = str(exc)
+        if "429" in exc_str or "quota" in exc_str.lower() or "rate" in exc_str.lower():
+            try:
+                from app.core.metrics import inc_gemini_call
+                inc_gemini_call("extract_dates", "rate_limited")
+            except Exception:
+                pass
+            raise
+        try:
+            from app.core.metrics import inc_gemini_call
+            inc_gemini_call("extract_dates", "error")
+        except Exception:
+            pass
         logger.warning("LangGraph extract_dates_node error: %s", exc)
         state['raw_dates'] = []
 
@@ -194,23 +236,33 @@ Rules:
 - "tonight" → {local_date} 23:59
 - "tomorrow at 4pm" → tomorrow's date at 16:00
 - "Monday at 3pm" → next Monday at 15:00
-- "next week" → {local_date} + 7 days
+- "next week" → next Monday at 09:00
 - "ASAP" → current time + 2 hours
+- "EOD" or "end of day" → {local_date} 18:00
+- "EOW" or "end of week" → this Friday at 18:00
+- "EOM" or "end of month" → last calendar day of current month at 23:59
 - Missing year → use current year
-- If no time given → use 23:59
+- If no time given for a deadline → use 23:59 (end of day)
+- If no time given for a meeting → use 10:00 (morning)
+- If the resolved date appears to be in the past but the email is recent → assume NEXT occurrence
+- Return null for due_at_local if you cannot confidently resolve the date — do not guess
 
 Reply with ONLY a valid JSON array:
 [
   {{"due_at_local": "2026-04-21 16:00", "confidence": 0.95, "source_text": "tomorrow at 4pm"}},
   ...
 ]
-confidence: 1.0=exact, 0.7=inferred, 0.4=vague"""
+confidence: 1.0=exact date+time stated, 0.85=date stated no time, 0.7=relative date inferred, 0.4=vague reference
 
     try:
+        from app.core.metrics import inc_gemini_call, observe_gemini_latency
+        _t0 = time.perf_counter()
         response = llm.invoke([
             SystemMessage(content="You are a date resolver. Output local times only, not UTC. Always respond with valid JSON only."),
             HumanMessage(content=prompt),
         ])
+        observe_gemini_latency("resolve_dates", time.perf_counter() - _t0)
+        inc_gemini_call("resolve_dates", "success")
         text = response.content.strip()
         match = re.search(r'\[.*\]', text, re.DOTALL)
         if match:
@@ -221,8 +273,6 @@ confidence: 1.0=exact, 0.7=inferred, 0.4=vague"""
                 if not local_str:
                     continue
                 try:
-                    # Parse the local datetime string Gemini returned
-                    # Try common formats: "2026-04-21 09:30" or "2026-04-21 09:30:00"
                     local_dt = None
                     for fmt in ('%Y-%m-%d %H:%M', '%Y-%m-%d %H:%M:%S', '%Y-%m-%dT%H:%M', '%Y-%m-%dT%H:%M:%S'):
                         try:
@@ -232,7 +282,6 @@ confidence: 1.0=exact, 0.7=inferred, 0.4=vague"""
                             continue
 
                     if local_dt:
-                        # Localize to user's timezone then convert to UTC
                         local_tz_obj = pytz.timezone(user_tz)
                         localized = local_tz_obj.localize(local_dt)
                         utc_dt = localized.astimezone(pytz.UTC)
@@ -247,6 +296,19 @@ confidence: 1.0=exact, 0.7=inferred, 0.4=vague"""
         else:
             state['resolved_deadlines'] = []
     except Exception as exc:
+        exc_str = str(exc)
+        if "429" in exc_str or "quota" in exc_str.lower() or "rate" in exc_str.lower():
+            try:
+                from app.core.metrics import inc_gemini_call
+                inc_gemini_call("resolve_dates", "rate_limited")
+            except Exception:
+                pass
+            raise
+        try:
+            from app.core.metrics import inc_gemini_call
+            inc_gemini_call("resolve_dates", "error")
+        except Exception:
+            pass
         logger.warning("LangGraph resolve_dates_node error: %s", exc)
         state['resolved_deadlines'] = []
 
