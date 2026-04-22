@@ -82,8 +82,9 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    command: celery -A app.core.celery_app.celery_app worker --loglevel=info --concurrency=4 --queues=celery,nlp
+    command: celery -A app.core.celery_app.celery_app worker --loglevel=info --concurrency=4 --queues=celery,nlp,polling,reminders
     env_file: .env
+    restart: unless-stopped
     depends_on:
       db:
         condition: service_healthy
@@ -103,6 +104,7 @@ services:
       --scheduler celery.beat.PersistentScheduler
       --schedule /tmp/celerybeat-schedule
     env_file: .env
+    restart: unless-stopped
     depends_on:
       - worker
     volumes:
