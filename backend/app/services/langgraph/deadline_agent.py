@@ -252,7 +252,7 @@ Reply with ONLY a valid JSON array:
   {{"due_at_local": "2026-04-21 16:00", "confidence": 0.95, "source_text": "tomorrow at 4pm"}},
   ...
 ]
-confidence: 1.0=exact date+time stated, 0.85=date stated no time, 0.7=relative date inferred, 0.4=vague reference
+confidence: 1.0=exact date+time stated, 0.85=date stated no time, 0.7=relative date inferred, 0.4=vague reference"""
 
     try:
         from app.core.metrics import inc_gemini_call, observe_gemini_latency

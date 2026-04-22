@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
     create_async_engine,
 )
+from sqlalchemy.pool import NullPool
 from sqlalchemy.orm import DeclarativeBase
 
 from app.config import settings
@@ -41,13 +42,16 @@ def make_session_factory():
     """
     global _celery_engine, _celery_session_factory
     if _celery_session_factory is None:
+        # NullPool: no persistent connections held between tasks.
+        # Celery fork workers each get a new event loop via _run(); a pooled
+        # engine would hold connections attached to the parent loop, causing
+        # "Future attached to a different loop" errors. NullPool creates a
+        # fresh connection per session and closes it immediately after.
+        # DNS is still resolved only once (when the engine is first created).
         _celery_engine = create_async_engine(
             settings.database_url,
             echo=False,
-            pool_pre_ping=True,
-            pool_size=5,
-            max_overflow=10,
-            pool_recycle=300,  # recycle connections every 5 min
+            poolclass=NullPool,
         )
         _celery_session_factory = async_sessionmaker(
             _celery_engine,
