@@ -6,6 +6,8 @@ export interface DashboardStats {
   upcoming_reminders: number;
   emails_processed_today: number;
   connected_accounts: number;
+  total_emails_read: number;
+  important_emails_today: number;
 }
 
 export const statsApi = {

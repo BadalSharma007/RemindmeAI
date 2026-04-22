@@ -91,10 +91,13 @@ async def _poll_single_connection(db, connection) -> int:
 
     access_token = await _ensure_fresh_token(db, connection)
 
-    # Fetch messages received since last poll (read or unread)
+    # Fetch important messages since last poll.
+    # Excludes Gmail's Promotions and Social tabs and the Spam folder so that
+    # marketing blasts and social-media pings never enter the NLP pipeline.
+    # Primary tab (university, bank, job) + Updates tab (OTPs, bills) are kept.
     after_ts = connection.last_polled_at or (datetime.now(timezone.utc) - timedelta(days=7))
     after_epoch = int(after_ts.timestamp())
-    query = f"after:{after_epoch}"
+    query = f"after:{after_epoch} -category:promotions -category:social -in:spam"
 
     client = _get_http_client()
     try:

@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import {
   CalendarClock, Clock, Bell, Mail, Link2, Plus, ArrowUpRight,
-  Sparkles, TrendingUp,
+  Sparkles, TrendingUp, Inbox, ShieldCheck,
 } from "lucide-react";
 
 /* ── Types ────────────────────────────────────────────────────────────── */
@@ -11,6 +11,8 @@ interface DashboardStats {
   upcoming_reminders: number;
   emails_processed_today: number;
   connected_accounts: number;
+  total_emails_read: number;
+  important_emails_today: number;
 }
 
 /* ── Mock Stats ───────────────────────────────────────────────────────── */
@@ -20,6 +22,8 @@ const MOCK_STATS: DashboardStats = {
   upcoming_reminders: 8,
   emails_processed_today: 23,
   connected_accounts: 2,
+  total_emails_read: 142,
+  important_emails_today: 18,
 };
 
 /* ── Stat Card ────────────────────────────────────────────────────────── */
@@ -48,8 +52,8 @@ function DashboardSkeleton() {
         <div className="skeleton h-8 w-48" />
         <div className="skeleton h-10 w-36 rounded-xl" />
       </div>
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4 mb-8">
-        {[1, 2, 3, 4, 5].map((i) => <div key={i} className="skeleton h-32 rounded-xl" />)}
+      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4 mb-8">
+        {[1, 2, 3, 4, 5, 6, 7].map((i) => <div key={i} className="skeleton h-32 rounded-xl" />)}
       </div>
     </div>
   );
@@ -128,11 +132,13 @@ export function Dashboard() {
       </div>
 
       {/* ── Stats Grid ──────────────────────────────────────────── */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4 mb-8">
+      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4 mb-8">
         <StatCard label="Total Deadlines" value={stats.total_deadlines} icon={CalendarClock} />
         <StatCard label="Pending" value={stats.pending_deadlines} icon={Clock} accent="text-tertiary" />
         <StatCard label="Upcoming Reminders" value={stats.upcoming_reminders} icon={Bell} accent="text-tertiary" />
+        <StatCard label="Total Read" value={stats.total_emails_read} icon={Inbox} accent="text-primary" />
         <StatCard label="Emails Today" value={stats.emails_processed_today} icon={Mail} accent="text-primary" />
+        <StatCard label="Important Today" value={stats.important_emails_today} icon={ShieldCheck} accent="text-secondary" />
         <StatCard label="Connected" value={stats.connected_accounts} icon={Link2} accent="text-primary" />
       </div>
 

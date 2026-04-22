@@ -10,3 +10,5 @@ class DashboardStats(BaseModel):
     upcoming_reminders: int = 0
     emails_processed_today: int = 0
     connected_accounts: int = 0
+    total_emails_read: int = 0       # all-time emails fetched across all connections
+    important_emails_today: int = 0  # today's non-spam emails (deadline candidates)

@@ -99,6 +99,26 @@ async def _compute_dashboard_stats(db: AsyncSession, current_user_id: str) -> Da
     )
     connected_accounts = accounts_result.scalar() or 0
 
+    total_read_result = await db.execute(
+        select(func.count())
+        .select_from(ExtractedEmail)
+        .join(EmailConnection, ExtractedEmail.connection_id == EmailConnection.id)
+        .where(EmailConnection.user_id == uid)
+    )
+    total_emails_read = total_read_result.scalar() or 0
+
+    important_today_result = await db.execute(
+        select(func.count())
+        .select_from(ExtractedEmail)
+        .join(EmailConnection, ExtractedEmail.connection_id == EmailConnection.id)
+        .where(
+            EmailConnection.user_id == uid,
+            ExtractedEmail.is_spam == False,
+            ExtractedEmail.created_at >= today_start,
+        )
+    )
+    important_emails_today = important_today_result.scalar() or 0
+
     return DashboardStats(
         total_deadlines=total_deadlines,
         pending_deadlines=pending_deadlines,
@@ -106,4 +126,6 @@ async def _compute_dashboard_stats(db: AsyncSession, current_user_id: str) -> Da
         upcoming_reminders=upcoming_reminders,
         emails_processed_today=emails_today,
         connected_accounts=connected_accounts,
+        total_emails_read=total_emails_read,
+        important_emails_today=important_emails_today,
     )
