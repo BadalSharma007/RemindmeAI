@@ -114,9 +114,9 @@ def create_app() -> FastAPI:
             checks["redis"] = f"error: {exc}"
 
         try:
-            import pika
             broker_url = settings.rabbitmq_url or settings.celery_broker_url
             if broker_url.startswith("amqp"):
+                import pika
                 params = pika.URLParameters(broker_url)
                 params.socket_timeout = 2
                 conn = pika.BlockingConnection(params)

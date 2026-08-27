@@ -1,19 +1,10 @@
-"""Outlook email poller — Microsoft Graph API.
+"""Outlook email poller — Microsoft Graph API, parallel per-connection.
 
-Celery Beat task (every 5 min) that mirrors the Gmail poller.
-After saving new ``ExtractedEmail`` rows it publishes each to the NLP
-event bus (``process_email_nlp`` on the ``nlp`` queue) rather than
-running NLP inline.
+Same architecture as gmail_poller: Beat fires `poll_all_outlook_connections`
+every 60 s, which dispatches one `poll_single_outlook_connection` subtask per
+active connection so all accounts are polled in parallel.
 
-Microsoft Graph Messages API
------------------------------
-  List  : GET https://graph.microsoft.com/v1.0/me/messages
-  Single: GET https://graph.microsoft.com/v1.0/me/messages/{id}
-
-Delta / incremental sync uses the ``@odata.deltaLink`` returned by the
-first full-sync page response.  The ``delta_link`` is stored on the
-``EmailConnection`` row (``history_id`` column — shared with Gmail's
-``historyId``).
+Delta / incremental sync uses `@odata.deltaLink` stored in `history_id`.
 """
 from __future__ import annotations
 
@@ -31,10 +22,12 @@ logger = logging.getLogger(__name__)
 
 _GRAPH_MESSAGES_URL = "https://graph.microsoft.com/v1.0/me/messages"
 _GRAPH_DELTA_URL = "https://graph.microsoft.com/v1.0/me/messages/delta"
-
-# Fields to select — we never fetch the full body
 _SELECT_FIELDS = "id,subject,from,receivedDateTime,bodyPreview,internetMessageHeaders"
 
+
+# ---------------------------------------------------------------------------
+# Beat entry-point
+# ---------------------------------------------------------------------------
 
 @celery_app.task(
     name="app.services.ingestion.outlook_poller.poll_all_outlook_connections",
@@ -42,49 +35,91 @@ _SELECT_FIELDS = "id,subject,from,receivedDateTime,bodyPreview,internetMessageHe
     max_retries=2,
 )
 def poll_all_outlook_connections(self) -> dict:
-    """Celery Beat task (every 1 min). Polls all active Outlook connections."""
+    """Celery Beat task (every 1 min). Dispatches one subtask per connection."""
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
-        return loop.run_until_complete(_poll_all_async())
+        return loop.run_until_complete(_dispatch_all_connections())
     except Exception as exc:
-        logger.error("Outlook poll task failed: %s", exc, exc_info=True)
+        logger.error("Outlook dispatch task failed: %s", exc, exc_info=True)
         raise self.retry(exc=exc, countdown=30 * (2 ** self.request.retries))
     finally:
         loop.close()
 
 
-async def _poll_all_async() -> dict:
+async def _dispatch_all_connections() -> dict:
     from sqlalchemy import select
     from app.database import make_session_factory
-    AsyncSessionLocal = make_session_factory()
     from app.models.email_connection import EmailConnection
 
-    results = {"processed": 0, "errors": 0, "connections": 0}
+    AsyncSessionLocal = make_session_factory()
+    dispatched = 0
 
-    # Fresh client per task — avoids "Event loop is closed" across Celery forks.
-    async with httpx.AsyncClient(timeout=30) as client:
-        async with AsyncSessionLocal() as db:
-            stmt = select(EmailConnection).where(
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(
+            select(EmailConnection.id).where(
                 EmailConnection.is_active == True,
                 EmailConnection.provider == "outlook",
             )
-            result = await db.execute(stmt)
-            connections = result.scalars().all()
-            results["connections"] = len(connections)
+        )
+        connection_ids = [str(row[0]) for row in result.all()]
 
-            for conn in connections:
-                try:
-                    count = await _poll_single_connection(db, conn, client)
-                    results["processed"] += count
-                except Exception as exc:
-                    logger.error(
-                        "Error polling Outlook connection %s: %s", conn.id, exc, exc_info=True
-                    )
-                    results["errors"] += 1
+    for conn_id in connection_ids:
+        poll_single_outlook_connection.delay(conn_id)
+        dispatched += 1
 
-    return results
+    logger.info("Dispatched %d Outlook poll subtasks", dispatched)
+    return {"dispatched": dispatched}
 
+
+# ---------------------------------------------------------------------------
+# Per-connection subtask
+# ---------------------------------------------------------------------------
+
+@celery_app.task(
+    name="app.services.ingestion.outlook_poller.poll_single_outlook_connection",
+    bind=True,
+    max_retries=3,
+    queue="polling",
+)
+def poll_single_outlook_connection(self, connection_id: str) -> dict:
+    """Poll one Outlook connection independently. Retries on failure."""
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        return loop.run_until_complete(_poll_connection_async(connection_id))
+    except Exception as exc:
+        logger.error(
+            "Outlook poll failed for connection %s: %s", connection_id, exc, exc_info=True
+        )
+        raise self.retry(exc=exc, countdown=60 * (2 ** self.request.retries))
+    finally:
+        loop.close()
+
+
+async def _poll_connection_async(connection_id: str) -> dict:
+    from sqlalchemy import select
+    from app.database import make_session_factory
+    from app.models.email_connection import EmailConnection
+
+    AsyncSessionLocal = make_session_factory()
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(
+                select(EmailConnection).where(EmailConnection.id == connection_id)
+            )
+            connection = result.scalar_one_or_none()
+            if not connection or not connection.is_active:
+                return {"connection_id": connection_id, "processed": 0, "skipped": True}
+
+            count = await _poll_single_connection(db, connection, client)
+            return {"connection_id": connection_id, "processed": count}
+
+
+# ---------------------------------------------------------------------------
+# Core polling logic
+# ---------------------------------------------------------------------------
 
 async def _poll_single_connection(db, connection, client: httpx.AsyncClient) -> int:
     """Poll Microsoft Graph for new messages. Returns count of new emails saved."""
@@ -94,7 +129,6 @@ async def _poll_single_connection(db, connection, client: httpx.AsyncClient) -> 
 
     access_token = await _ensure_fresh_token(db, connection)
 
-    # Use delta link for incremental sync if available, else full sync
     url = connection.history_id or _GRAPH_DELTA_URL
     params = {
         "$select": _SELECT_FIELDS,
@@ -113,7 +147,6 @@ async def _poll_single_connection(db, connection, client: httpx.AsyncClient) -> 
 
     messages = data.get("value", [])
 
-    # Store delta link for next incremental sync
     next_delta = data.get("@odata.deltaLink")
     if next_delta:
         connection.history_id = next_delta
@@ -124,7 +157,6 @@ async def _poll_single_connection(db, connection, client: httpx.AsyncClient) -> 
         if not message_id:
             continue
 
-        # Dedup check
         existing = await db.execute(
             select(ExtractedEmail).where(
                 ExtractedEmail.connection_id == connection.id,
@@ -134,7 +166,6 @@ async def _poll_single_connection(db, connection, client: httpx.AsyncClient) -> 
         if existing.scalar_one_or_none():
             continue
 
-        # Parse metadata
         subject = msg.get("subject") or ""
         snippet = (msg.get("bodyPreview") or "")[:500]
         sender_obj = msg.get("from", {}).get("emailAddress", {})
@@ -146,7 +177,6 @@ async def _poll_single_connection(db, connection, client: httpx.AsyncClient) -> 
         except (ValueError, AttributeError):
             received_at = datetime.now(timezone.utc)
 
-        # Extract internet message headers (spam signals)
         headers: dict[str, str] = {}
         for hdr in msg.get("internetMessageHeaders", []):
             headers[hdr.get("name", "").lower()] = hdr.get("value", "")
@@ -163,7 +193,6 @@ async def _poll_single_connection(db, connection, client: httpx.AsyncClient) -> 
         db.add(email_row)
         await db.flush()
 
-        # Publish to NLP queue (async, non-blocking)
         publish_email_for_nlp(email_row.id)
         count += 1
 
@@ -172,11 +201,12 @@ async def _poll_single_connection(db, connection, client: httpx.AsyncClient) -> 
     return count
 
 
+# ---------------------------------------------------------------------------
+# Token management
+# ---------------------------------------------------------------------------
+
 async def _ensure_fresh_token(db, connection) -> str:
-    """Decrypt and refresh the Outlook access token if near expiry.
-    Uses a Redis distributed lock to prevent concurrent workers from
-    both calling Microsoft's token endpoint with the same refresh token.
-    """
+    """Decrypt and refresh the Outlook access token under a Redis lock if near expiry."""
     from datetime import timedelta
     from app.services.oauth.outlook import outlook_oauth_client
     import redis as _redis

@@ -193,6 +193,17 @@ async def _process_async(email_id: str) -> dict:
                 else:
                     logger.debug("Skipping low-confidence deadline (%.2f): %s", cal_conf, d.get('source_text'))
             raw_deadlines = calibrated
+            if not raw_deadlines:
+                from app.services.nlp.deadline_extractor import extract_deadlines
+                fallback_deadlines = extract_deadlines(
+                    f"{email.subject or ''}\n{email.snippet or ''}",
+                    reference_time=email.received_at,
+                )
+                raw_deadlines = fallback_deadlines
+                logger.info(
+                    "Deterministic fallback extracted %d deadlines for email %s",
+                    len(raw_deadlines), email_id,
+                )
             logger.info("Gemini extracted %d deadlines (after calibration) for email %s", len(raw_deadlines), email_id)
         except Exception as lg_exc:
             logger.error("Gemini extraction failed for email %s: %s — releasing for rescue", email_id, lg_exc)
