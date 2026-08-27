@@ -16,6 +16,7 @@ RUN pip install --no-cache-dir https://github.com/explosion/spacy-models/release
 COPY . .
 
 RUN chmod +x start.sh
+RUN chmod +x start_worker_with_beat.sh
 
 EXPOSE 8000
 CMD ["sh", "start.sh"]
