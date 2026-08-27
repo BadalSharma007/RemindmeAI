@@ -3,7 +3,7 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import List
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -16,6 +16,35 @@ class Settings(BaseSettings):
 
     # --- Database ---
     database_url: str = Field(..., description="asyncpg DSN e.g. postgresql+asyncpg://...")
+
+    @field_validator("secret_key")
+    @classmethod
+    def validate_secret_key(cls, value: str) -> str:
+        if len(value) < 32:
+            raise ValueError("SECRET_KEY must contain at least 32 characters")
+        return value
+
+    @field_validator("fernet_key")
+    @classmethod
+    def validate_fernet_key(cls, value: str) -> str:
+        from cryptography.fernet import Fernet, InvalidToken
+
+        try:
+            Fernet(value.encode())
+        except (ValueError, TypeError, InvalidToken) as exc:
+            raise ValueError("FERNET_KEY must be a valid Fernet key") from exc
+        return value
+
+    @field_validator("database_url", mode="before")
+    @classmethod
+    def normalize_database_url(cls, value: str) -> str:
+        if not isinstance(value, str):
+            return value
+        if value.startswith("postgres://"):
+            return "postgresql+asyncpg://" + value[len("postgres://"):]
+        if value.startswith("postgresql://"):
+            return "postgresql+asyncpg://" + value[len("postgresql://"):]
+        return value
 
     # --- Redis ---
     redis_url: str = "redis://localhost:6379/0"

@@ -2,6 +2,19 @@
 set -e
 
 echo "=== RemindmeAI API startup ==="
+for variable in SECRET_KEY FERNET_KEY DATABASE_URL; do
+    value=$(printenv "$variable" || true)
+    if [ -z "$value" ]; then
+        echo "ERROR: Required environment variable $variable is not set" >&2
+        exit 1
+    fi
+done
+
+if ! python -c "from app.config import settings; print('=== Production configuration validated ===')"; then
+    echo "ERROR: Production configuration is invalid" >&2
+    exit 1
+fi
+
 echo "=== Running database migrations ==="
 
 if alembic upgrade head; then
