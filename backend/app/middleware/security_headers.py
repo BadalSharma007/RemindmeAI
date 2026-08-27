@@ -26,9 +26,9 @@ from starlette.responses import Response
 # separately via CDN should add their origins here.
 _CSP = (
     "default-src 'self'; "
-    "script-src 'self'; "
-    "style-src 'self' 'unsafe-inline'; "
-    "img-src 'self' data:; "
+    "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+    "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+    "img-src 'self' data: https://fastapi.tiangolo.com; "
     "font-src 'self'; "
     "connect-src 'self'; "
     "frame-ancestors 'none'; "
