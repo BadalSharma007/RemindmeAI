@@ -3,12 +3,9 @@ from __future__ import annotations
 import logging
 from contextlib import asynccontextmanager
 
-import os
-
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import JSONResponse
 
 from app.config import settings
 from app.core.logging_config import configure_logging
@@ -138,14 +135,9 @@ def create_app() -> FastAPI:
     from app.core.metrics import metrics_endpoint
     app.add_route("/metrics", metrics_endpoint, methods=["GET"])
 
-    # Serve built React frontend — catch-all so React Router works
-    static_dir = "/code/static"
-    if os.path.isdir(static_dir):
-        app.mount("/assets", StaticFiles(directory=f"{static_dir}/assets"), name="assets")
-
-        @app.get("/{full_path:path}", include_in_schema=False)
-        async def serve_spa(full_path: str):
-            return FileResponse(f"{static_dir}/index.html")
+    @app.get("/", tags=["ops"])
+    async def api_root() -> dict:
+        return {"service": settings.app_name, "docs": "/docs", "health": "/health"}
 
     return app
 
