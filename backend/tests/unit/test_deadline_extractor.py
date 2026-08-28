@@ -71,3 +71,16 @@ def test_source_text_contains_context():
     assert len(deadlines[0].source_text) > 0
     # The extracted date string should appear in or near the source text
     assert "2026" in deadlines[0].source_text or "March" in deadlines[0].source_text
+
+
+def test_extract_today_with_time_timezone():
+    # Email received at 09:40 UTC on Aug 28, 2026 (= 15:10 IST)
+    ref = datetime(2026, 8, 28, 9, 40, 0, tzinfo=timezone.utc)
+    text = "Important notification regarding the deadline for our upcoming meeting scheduled for today at 6:00 PM."
+    deadlines = extract_deadlines(text, reference_time=ref, user_timezone="Asia/Kolkata")
+    assert len(deadlines) >= 1
+    due = deadlines[0].due_at
+    # 6:00 PM IST is 12:30 UTC
+    assert due.year == 2026 and due.month == 8 and due.day == 28
+    assert due.hour == 12 and due.minute == 30
+

@@ -199,6 +199,7 @@ def _dedup(candidates: list[ExtractedDeadline]) -> list[ExtractedDeadline]:
 def extract_deadlines(
     text: str,
     reference_time: datetime | None = None,
+    user_timezone: str = "Asia/Kolkata",
 ) -> list[ExtractedDeadline]:
     """
     Extract deadlines from email text using a 3-tier strategy.
@@ -206,9 +207,10 @@ def extract_deadlines(
     Args:
         text: Cleaned subject + snippet (subject should come first).
         reference_time: Email received_at (UTC). Defaults to utcnow().
+        user_timezone: User's local timezone (e.g. 'Asia/Kolkata').
 
     Returns:
-        Up to 2 unique deadlines sorted by due_at ascending.
+        Up to 2 unique deadlines sorted by due_at ascending (in UTC).
     """
     if not text or not text.strip():
         return []
@@ -217,8 +219,18 @@ def extract_deadlines(
     if now.tzinfo is None:
         now = now.replace(tzinfo=timezone.utc)
 
+    # Localize reference time to user's timezone for accurate relative base
+    try:
+        import pytz
+        local_tz = pytz.timezone(user_timezone)
+        now_local = now.astimezone(local_tz)
+    except Exception:
+        now_local = now
+
     settings = dict(DATEPARSER_SETTINGS)
-    settings["RELATIVE_BASE"] = now.replace(tzinfo=None)
+    settings["TIMEZONE"] = user_timezone
+    settings["TO_TIMEZONE"] = "UTC"
+    settings["RELATIVE_BASE"] = now_local.replace(tzinfo=None)
 
     # Subject is the first line (most reliable signal)
     lines = text.strip().splitlines()

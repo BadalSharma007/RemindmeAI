@@ -173,11 +173,12 @@ async def _process_async(email_id: str) -> dict:
         # If Gemini fails, un-claim the email so rescue task retries it cleanly
         try:
             from app.services.langgraph.deadline_agent import extract_deadlines_with_agent
+            user_tz = user.timezone if user.timezone and user.timezone != "UTC" else "Asia/Kolkata"
             agent_results = extract_deadlines_with_agent(
                 subject=email.subject or "",
                 snippet=email.snippet or "",
                 received_at=email.received_at or datetime.now(timezone.utc),
-                user_timezone=user.timezone if user.timezone and user.timezone != "UTC" else "Asia/Kolkata",
+                user_timezone=user_tz,
             )
             class _DL:
                 def __init__(self, d, calibrated_confidence: float):
@@ -198,6 +199,7 @@ async def _process_async(email_id: str) -> dict:
                 fallback_deadlines = extract_deadlines(
                     f"{email.subject or ''}\n{email.snippet or ''}",
                     reference_time=email.received_at,
+                    user_timezone=user_tz,
                 )
                 raw_deadlines = fallback_deadlines
                 logger.info(
