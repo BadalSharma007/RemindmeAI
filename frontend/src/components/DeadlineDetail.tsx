@@ -1,13 +1,14 @@
 import React, { useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { format, parseISO, formatDistanceToNow, isPast } from "date-fns";
+import { format, parseISO, formatDistanceToNow } from "date-fns";
 import {
   ArrowLeft, CalendarClock, Clock, Check, X, Trash2,
   Sparkles, Bell, Plus, AlertTriangle, CheckCircle2,
 } from "lucide-react";
 import { deadlinesApi } from "../api/deadlines";
 import { remindersApi } from "../api/reminders";
+import { getDeadlineUrgency } from "../utils/urgency";
 import { ConfirmDialog } from "./shared/ConfirmDialog";
 import { Modal } from "./shared/Modal";
 
@@ -67,7 +68,7 @@ function CreateReminderModal({ deadlineId, onClose }: { deadlineId: string; onCl
   );
 }
 
-/* ── Deadline Detail Page ───────────────────────────────────────────── */
+/* ── Deadline Detail Page with Dynamic Urgency Header ──────────────── */
 export function DeadlineDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -127,7 +128,7 @@ export function DeadlineDetail() {
     </div>
   );
 
-  const overdue = isPast(parseISO(dl.due_at)) && dl.status === "pending";
+  const urgency = getDeadlineUrgency(dl.due_at, dl.status);
   const isAI = dl.source_text && dl.source_text !== "Manual entry" && dl.confidence_score < 1.0;
   const isActionable = dl.status === "pending" || dl.status === "reminded";
 
@@ -145,15 +146,19 @@ export function DeadlineDetail() {
         <ArrowLeft className="w-4 h-4" />Back to Deadlines
       </button>
 
-      {/* Main Card */}
-      <div className={`bg-surface-container rounded-2xl border ${overdue ? "border-error/20" : "border-white/5"} overflow-hidden mb-4`}>
-        {overdue && <div className="h-1 bg-error w-full" />}
+      {/* Main Card with Urgency Theme */}
+      <div className={`bg-surface-container rounded-2xl border ${urgency.cardBorder} overflow-hidden mb-4`}>
+        {/* Dynamic Urgency Top Banner Strip */}
+        <div className={`h-1.5 ${urgency.stripeBg} w-full`} />
 
         <div className="p-6">
           {/* Title & Badges */}
           <div className="flex items-start gap-3 mb-4">
             <div className="flex-1">
               <div className="flex items-center gap-2 flex-wrap mb-2">
+                <span className={`text-xs font-semibold px-2.5 py-1 rounded-full border ${urgency.badgeBg} ${urgency.badgeText} ${urgency.badgeBorder}`}>
+                  {urgency.label}
+                </span>
                 <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${statusColors[dl.status] ?? statusColors.pending}`}>
                   {dl.status.charAt(0).toUpperCase() + dl.status.slice(1)}
                 </span>
@@ -162,9 +167,6 @@ export function DeadlineDetail() {
                     <Sparkles className="w-3 h-3" />AI Detected
                   </span>
                 )}
-                {overdue && (
-                  <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-error/10 text-error">Overdue</span>
-                )}
               </div>
               <h1 className={`text-xl font-semibold ${dl.status === "completed" ? "line-through text-on-surface-variant/50" : "text-on-surface"}`}>
                 {dl.title}
@@ -172,11 +174,11 @@ export function DeadlineDetail() {
             </div>
           </div>
 
-          {/* Due date */}
-          <div className={`flex items-center gap-2 mb-4 p-3 rounded-xl ${overdue ? "bg-error/5" : "bg-surface-container-high"}`}>
-            <Clock className={`w-4 h-4 ${overdue ? "text-error" : "text-primary"}`} />
+          {/* Due date with Urgency Background */}
+          <div className={`flex items-center gap-2 mb-4 p-3.5 rounded-xl border ${urgency.bannerBg} ${urgency.cardBorder}`}>
+            <Clock className={`w-4 h-4 ${urgency.iconColor}`} />
             <div>
-              <p className={`text-sm font-semibold ${overdue ? "text-error" : "text-on-surface"}`}>
+              <p className={`text-sm font-semibold ${urgency.badgeText}`}>
                 {format(parseISO(dl.due_at), "EEEE, MMMM d, yyyy · h:mm a")}
               </p>
               <p className="text-xs text-on-surface-variant/60">

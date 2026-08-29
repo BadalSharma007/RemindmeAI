@@ -1,12 +1,13 @@
 import React, { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
-import { format, parseISO, formatDistanceToNow, isPast, isToday, isTomorrow } from "date-fns";
+import { format, parseISO, formatDistanceToNow, isToday, isTomorrow } from "date-fns";
 import {
   CalendarClock, Check, X, Clock, AlertTriangle, CheckCircle2, XCircle,
   Filter, Search, Plus, Sparkles, ArrowRight,
 } from "lucide-react";
 import { deadlinesApi, type Deadline } from "../api/deadlines";
+import { getDeadlineUrgency } from "../utils/urgency";
 
 const STATUS_CONFIG: Record<string, { bg: string; text: string; icon: React.ElementType; label: string }> = {
   pending: { bg: "bg-amber-500/10", text: "text-amber-400", icon: Clock, label: "Pending" },
@@ -138,6 +139,15 @@ export function Deadlines() {
         <p className="text-body-md text-on-surface-variant ml-8">Track and manage your upcoming deadlines.</p>
       </div>
 
+      {/* Urgency Legend Guide */}
+      <div className="flex items-center gap-3 flex-wrap text-xs text-on-surface-variant/70 mb-5 bg-surface-container-low px-4 py-2.5 rounded-xl border border-white/5">
+        <span className="font-semibold text-on-surface">Urgency colors:</span>
+        <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-red-500/10 text-red-400 font-medium">🔴 &le;2 Days (Red)</span>
+        <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-blue-500/10 text-blue-400 font-medium">🔵 3-7 Days (Blue)</span>
+        <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-emerald-500/10 text-emerald-400 font-medium">🟢 &gt;7 Days (Green)</span>
+        <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-slate-500/10 text-slate-400 font-medium">⚪ &gt;14 Days / Done (Gray)</span>
+      </div>
+
       {/* Search & Filter */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3 mb-6">
         <div className="relative flex-1 w-full sm:max-w-xs">
@@ -171,42 +181,47 @@ export function Deadlines() {
             const cfg = STATUS_CONFIG[dl.status] ?? STATUS_CONFIG.pending;
             const StatusIcon = cfg.icon;
             const isActionable = dl.status === "pending" || dl.status === "reminded";
-            const overdue = isPast(parseISO(dl.due_at)) && dl.status === "pending";
+            const urgency = getDeadlineUrgency(dl.due_at, dl.status);
             const isAI = dl.source_text && dl.source_text !== "Manual entry" && dl.confidence_score < 1.0;
 
             return (
               <div
                 key={dl.id}
-                className={`bg-surface-container rounded-xl p-5 card-hover animate-slide-up group border border-white/5 relative overflow-hidden ${overdue ? "border-error/20" : ""}`}
+                className={`bg-surface-container rounded-xl p-5 card-hover animate-slide-up group border ${urgency.cardBorder} relative overflow-hidden`}
                 style={{ animationDelay: `${idx * 40}ms` }}
               >
-                {/* Overdue left stripe */}
-                {overdue && <div className="absolute left-0 top-0 bottom-0 w-1 bg-error rounded-l-xl" />}
+                {/* Dynamic Urgency Left Stripe */}
+                <div className={`absolute left-0 top-0 bottom-0 w-1.5 ${urgency.stripeBg} rounded-l-xl`} />
 
-                <div className="flex items-start justify-between gap-4" style={{ paddingLeft: overdue ? "8px" : "0" }}>
+                <div className="flex items-start justify-between gap-4 pl-2">
                   <div className="flex-1 min-w-0 cursor-pointer" onClick={() => navigate(`/deadlines/${dl.id}`)}>
-                    <div className="flex items-center gap-2 mb-1">
+                    <div className="flex items-center gap-2 mb-1 flex-wrap">
                       <p className={`text-title-md truncate transition-premium ${
                         dl.status === "completed" ? "text-on-surface-variant/50 line-through" :
                         dl.status === "dismissed" ? "text-on-surface-variant/40" :
                         "text-on-surface group-hover:text-primary"
                       }`}>{dl.title}</p>
+                      
+                      {/* Urgency Badge */}
+                      <span className={`shrink-0 text-[10px] font-semibold px-2 py-0.5 rounded-full border ${urgency.badgeBg} ${urgency.badgeText} ${urgency.badgeBorder}`}>
+                        {urgency.label}
+                      </span>
+
                       {isAI && (
                         <span className="shrink-0 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-primary/10 text-primary flex items-center gap-1">
                           <Sparkles className="w-2.5 h-2.5" />AI
                         </span>
                       )}
-                      {overdue && (
-                        <span className="shrink-0 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-error/10 text-error">Overdue</span>
-                      )}
                     </div>
+
                     {dl.source_text && dl.source_text !== "Manual entry" && (
                       <p className="text-xs text-on-surface-variant/40 mt-0.5 truncate">{dl.source_text}</p>
                     )}
+
                     <div className="flex flex-wrap items-center gap-3 mt-2">
                       <div className="flex items-center gap-1.5">
-                        <Clock className={`w-3.5 h-3.5 ${overdue ? "text-error" : "text-on-surface-variant/50"}`} />
-                        <span className={`text-body-md ${overdue ? "text-error font-medium" : "text-on-surface-variant"}`}>
+                        <Clock className={`w-3.5 h-3.5 ${urgency.iconColor}`} />
+                        <span className={`text-body-md ${urgency.badgeText} font-medium`}>
                           {formatDue(dl.due_at)}
                           <span className="ml-1.5 text-xs opacity-60">({formatDistanceToNow(parseISO(dl.due_at), { addSuffix: true })})</span>
                         </span>
@@ -245,7 +260,7 @@ export function Deadlines() {
 
                 {/* AI Feedback prompt */}
                 {isAI && dl.status === "pending" && (
-                  <div className="mt-3 pt-3 border-t border-white/5 flex items-center gap-3">
+                  <div className="mt-3 pt-3 border-t border-white/5 flex items-center gap-3 pl-2">
                     <Sparkles className="w-3.5 h-3.5 text-primary shrink-0" />
                     <p className="text-xs text-on-surface-variant flex-1">Was this correctly detected?</p>
                     <button

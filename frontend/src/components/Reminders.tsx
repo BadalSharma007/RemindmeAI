@@ -7,6 +7,7 @@ import {
 } from "lucide-react";
 import { remindersApi, type Reminder } from "../api/reminders";
 import { deadlinesApi } from "../api/deadlines";
+import { getDeadlineUrgency } from "../utils/urgency";
 import { Modal } from "./shared/Modal";
 import { ConfirmDialog } from "./shared/ConfirmDialog";
 
@@ -239,6 +240,14 @@ export function Reminders() {
         ))}
       </div>
 
+      {/* Urgency Guide Bar */}
+      <div className="flex items-center gap-3 flex-wrap text-xs text-on-surface-variant/70 mb-5 bg-surface-container-low px-4 py-2.5 rounded-xl border border-white/5">
+        <span className="font-semibold text-on-surface">Reminder timing:</span>
+        <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-red-500/10 text-red-400 font-medium">🔴 &le;2 Days</span>
+        <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-blue-500/10 text-blue-400 font-medium">🔵 3-7 Days</span>
+        <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-emerald-500/10 text-emerald-400 font-medium">🟢 &gt;7 Days</span>
+      </div>
+
       {/* Filter */}
       <div className="flex items-center gap-2 overflow-x-auto pb-1 mb-6">
         <Filter className="w-4 h-4 text-on-surface-variant/50 shrink-0" />
@@ -272,18 +281,30 @@ export function Reminders() {
             const cfg = STATUS_CONFIG[r.status] ?? STATUS_CONFIG.pending;
             const Icon = cfg.icon;
             const isPending = r.status === "pending";
+            const urgency = getDeadlineUrgency(r.scheduled_at, r.status);
+
             return (
-              <div key={r.id} className="bg-surface-container rounded-xl p-5 card-hover animate-slide-up group border border-white/5"
-                style={{ animationDelay: `${idx * 40}ms` }}>
-                <div className="flex items-center justify-between gap-4">
+              <div
+                key={r.id}
+                className={`bg-surface-container rounded-xl p-5 card-hover animate-slide-up group border ${urgency.cardBorder} relative overflow-hidden`}
+                style={{ animationDelay: `${idx * 40}ms` }}
+              >
+                {/* Dynamic Urgency Left Stripe */}
+                <div className={`absolute left-0 top-0 bottom-0 w-1.5 ${urgency.stripeBg} rounded-l-xl`} />
+
+                <div className="flex items-center justify-between gap-4 pl-2">
                   <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 mb-2.5">
-                      <Clock className="w-3.5 h-3.5 text-on-surface-variant/50 shrink-0" />
+                    <div className="flex items-center gap-2 mb-2.5 flex-wrap">
+                      <Clock className={`w-3.5 h-3.5 ${urgency.iconColor} shrink-0`} />
                       <p className="text-body-md text-on-surface-variant">
-                        <span className="text-on-surface font-medium">{format(parseISO(r.scheduled_at), "MMM d, yyyy · h:mm a")}</span>
+                        <span className={`font-medium ${urgency.badgeText}`}>{format(parseISO(r.scheduled_at), "MMM d, yyyy · h:mm a")}</span>
                         <span className="ml-1.5 text-xs opacity-60">({formatDistanceToNow(parseISO(r.scheduled_at), { addSuffix: true })})</span>
                       </p>
+                      <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border ${urgency.badgeBg} ${urgency.badgeText} ${urgency.badgeBorder}`}>
+                        {urgency.label}
+                      </span>
                     </div>
+
                     <div className="flex flex-wrap items-center gap-2.5">
                       <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-surface-container-high text-on-surface-variant text-xs font-medium">
                         <Send className="w-3 h-3" />{r.channel}
@@ -299,6 +320,7 @@ export function Reminders() {
                       )}
                     </div>
                   </div>
+
                   {isPending && (
                     <div className="flex gap-2 shrink-0">
                       <button onClick={() => setSnoozeTarget(r)}

@@ -1,9 +1,10 @@
 import React, { useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
-import { format, parseISO, isPast } from "date-fns";
+import { format, parseISO, formatDistanceToNow } from "date-fns";
 import { Search as SearchIcon, CalendarClock, Clock, Sparkles, ArrowRight, X } from "lucide-react";
-import { deadlinesApi, type Deadline } from "../api/deadlines";
+import { deadlinesApi } from "../api/deadlines";
+import { getDeadlineUrgency } from "../utils/urgency";
 
 export function Search() {
   const navigate = useNavigate();
@@ -89,21 +90,28 @@ export function Search() {
           <p className="text-xs text-on-surface-variant/50 mb-3">{results.length} result{results.length !== 1 ? "s" : ""} for "{query}"</p>
           <div className="space-y-3">
             {results.map((dl, idx) => {
-              const overdue = isPast(parseISO(dl.due_at)) && dl.status === "pending";
+              const urgency = getDeadlineUrgency(dl.due_at, dl.status);
               const isAI = dl.source_text && dl.source_text !== "Manual entry" && dl.confidence_score < 1.0;
               return (
                 <div
                   key={dl.id}
                   onClick={() => navigate(`/deadlines/${dl.id}`)}
-                  className="bg-surface-container rounded-xl p-5 card-hover cursor-pointer group border border-white/5 animate-slide-up"
+                  className={`bg-surface-container rounded-xl p-5 card-hover cursor-pointer group border ${urgency.cardBorder} animate-slide-up relative overflow-hidden`}
                   style={{ animationDelay: `${idx * 40}ms` }}
                 >
-                  <div className="flex items-start justify-between gap-4">
+                  <div className={`absolute left-0 top-0 bottom-0 w-1.5 ${urgency.stripeBg} rounded-l-xl`} />
+
+                  <div className="flex items-start justify-between gap-4 pl-2">
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 mb-1.5 flex-wrap">
                         <p className="text-on-surface font-semibold group-hover:text-primary transition-premium truncate">
                           {dl.title}
                         </p>
+                        
+                        <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border ${urgency.badgeBg} ${urgency.badgeText} ${urgency.badgeBorder}`}>
+                          {urgency.label}
+                        </span>
+
                         {isAI && (
                           <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-primary/10 text-primary flex items-center gap-1 shrink-0">
                             <Sparkles className="w-2.5 h-2.5" />AI
@@ -117,11 +125,11 @@ export function Search() {
                         <p className="text-xs text-on-surface-variant/50 truncate mb-2">{dl.source_text}</p>
                       )}
                       <div className="flex items-center gap-1.5">
-                        <Clock className={`w-3.5 h-3.5 ${overdue ? "text-error" : "text-on-surface-variant/50"}`} />
-                        <span className={`text-xs ${overdue ? "text-error font-medium" : "text-on-surface-variant"}`}>
+                        <Clock className={`w-3.5 h-3.5 ${urgency.iconColor}`} />
+                        <span className={`text-xs ${urgency.badgeText} font-medium`}>
                           {format(parseISO(dl.due_at), "MMM d, yyyy · h:mm a")}
+                          <span className="ml-1 text-on-surface-variant/60 font-normal">({formatDistanceToNow(parseISO(dl.due_at), { addSuffix: true })})</span>
                         </span>
-                        {overdue && <span className="text-xs font-semibold text-error">· Overdue</span>}
                       </div>
                     </div>
                     <ArrowRight className="w-4 h-4 text-on-surface-variant/40 group-hover:text-primary transition-premium shrink-0 mt-1" />
