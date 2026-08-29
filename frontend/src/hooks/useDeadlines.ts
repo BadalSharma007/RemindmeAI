@@ -1,19 +1,18 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { deadlinesApi, type DeadlinePatch } from "../api/deadlines";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { deadlinesApi } from "../api/deadlines";
 
 export function useDeadlines(status?: string) {
   return useQuery({
-    queryKey: ["deadlines", status],
-    queryFn: () => deadlinesApi.getDeadlines({ status }),
-    staleTime: 30_000,
+    queryKey: ["deadlines", status ?? "all"],
+    queryFn: () => deadlinesApi.list(status),
   });
 }
 
 export function usePatchDeadline() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, patch }: { id: string; patch: DeadlinePatch }) =>
-      deadlinesApi.patchDeadline(id, patch),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["deadlines"] }),
+    mutationFn: ({ id, body }: { id: string; body: Parameters<typeof deadlinesApi.patch>[1] }) =>
+      deadlinesApi.patch(id, body),
+    onSettled: () => qc.invalidateQueries({ queryKey: ["deadlines"] }),
   });
 }

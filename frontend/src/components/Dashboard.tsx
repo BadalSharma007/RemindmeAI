@@ -1,161 +1,228 @@
-import { useState, useEffect } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { useNavigate } from "react-router-dom";
+import { format, parseISO, isPast, isToday, isTomorrow, isWithinInterval, addDays, startOfDay, endOfDay } from "date-fns";
 import {
-  CalendarClock, Clock, Bell, Mail, Link2, Plus, ArrowUpRight,
-  Sparkles, TrendingUp, Inbox, ShieldCheck,
+  CalendarClock, Clock, Bell, Mail, Link2, Plus,
+  Sparkles, TrendingUp, ArrowRight, CheckCircle2, AlertTriangle,
 } from "lucide-react";
+import { statsApi, authApi } from "../api";
+import { deadlinesApi, type Deadline } from "../api/deadlines";
 
-/* ── Types ────────────────────────────────────────────────────────────── */
-interface DashboardStats {
-  total_deadlines: number;
-  pending_deadlines: number;
-  upcoming_reminders: number;
-  emails_processed_today: number;
-  connected_accounts: number;
-  total_emails_read: number;
-  important_emails_today: number;
+/* ── Helpers ────────────────────────────────────────────────────────── */
+function getGreeting() {
+  const h = new Date().getHours();
+  if (h < 12) return "Good morning";
+  if (h < 17) return "Good afternoon";
+  return "Good evening";
 }
 
-/* ── Mock Stats ───────────────────────────────────────────────────────── */
-const MOCK_STATS: DashboardStats = {
-  total_deadlines: 12,
-  pending_deadlines: 5,
-  upcoming_reminders: 8,
-  emails_processed_today: 23,
-  connected_accounts: 2,
-  total_emails_read: 142,
-  important_emails_today: 18,
-};
+function formatRelativeDate(iso: string) {
+  const d = parseISO(iso);
+  if (isToday(d)) return `Today · ${format(d, "h:mm a")}`;
+  if (isTomorrow(d)) return `Tomorrow · ${format(d, "h:mm a")}`;
+  return format(d, "EEE, MMM d · h:mm a");
+}
 
-/* ── Stat Card ────────────────────────────────────────────────────────── */
+/* ── Stat Card ──────────────────────────────────────────────────────── */
 function StatCard({ label, value, icon: Icon, accent = "text-primary" }: {
   label: string; value: number; icon: React.ElementType; accent?: string;
 }) {
   return (
-    <div className="bg-surface-container rounded-xl p-5 card-hover group animate-slide-up">
-      <div className="flex items-start justify-between mb-4">
-        <div className={`p-2 rounded-lg bg-surface-container-high transition-premium group-hover:shadow-glow ${accent}`}>
-          <Icon className="w-4 h-4" />
-        </div>
-        <ArrowUpRight className="w-3.5 h-3.5 text-on-surface-variant/40 group-hover:text-primary transition-premium" />
+    <div className="bg-surface-container rounded-xl p-5 card-hover group animate-slide-up border border-white/5">
+      <div className={`p-2 rounded-lg bg-surface-container-high w-fit mb-3 ${accent}`}>
+        <Icon className="w-4 h-4" />
       </div>
-      <p className="text-on-surface leading-none mb-1 font-bold" style={{ fontSize: "2rem" }}>{value}</p>
+      <p className="text-on-surface font-bold leading-none mb-1" style={{ fontSize: "1.75rem" }}>{value}</p>
       <p className="text-label-sm text-on-surface-variant">{label}</p>
     </div>
   );
 }
 
-/* ── Loading Skeleton ─────────────────────────────────────────────────── */
+/* ── Mini Deadline Card ─────────────────────────────────────────────── */
+function MiniDeadlineCard({ dl }: { dl: Deadline }) {
+  const navigate = useNavigate();
+  const overdue = isPast(parseISO(dl.due_at)) && dl.status === "pending";
+  const isAI = dl.source_text && dl.source_text !== "Manual entry" && dl.confidence_score < 1.0;
+
+  return (
+    <div
+      onClick={() => navigate(`/deadlines/${dl.id}`)}
+      className="flex items-center gap-4 p-4 rounded-xl bg-surface-container card-hover cursor-pointer group border border-white/5 animate-slide-up"
+    >
+      <div className={`w-1 self-stretch rounded-full shrink-0 ${overdue ? "bg-error" : "bg-primary"}`} />
+      <div className="flex-1 min-w-0">
+        <p className="text-body-md text-on-surface font-medium truncate group-hover:text-primary transition-premium">
+          {dl.title}
+        </p>
+        <p className={`text-xs mt-0.5 ${overdue ? "text-error font-medium" : "text-on-surface-variant"}`}>
+          {overdue ? "⚠ Overdue · " : ""}{formatRelativeDate(dl.due_at)}
+        </p>
+      </div>
+      {isAI && (
+        <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-primary/10 text-primary shrink-0">AI</span>
+      )}
+      <ArrowRight className="w-4 h-4 text-on-surface-variant/40 group-hover:text-primary transition-premium shrink-0" />
+    </div>
+  );
+}
+
+/* ── Skeleton ───────────────────────────────────────────────────────── */
 function DashboardSkeleton() {
   return (
-    <div className="animate-fade-in">
-      <div className="flex items-center justify-between mb-8">
-        <div className="skeleton h-8 w-48" />
-        <div className="skeleton h-10 w-36 rounded-xl" />
+    <div className="animate-fade-in space-y-8">
+      <div className="skeleton h-10 w-64 rounded-xl" />
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        {[1,2,3,4].map(i => <div key={i} className="skeleton h-28 rounded-xl" />)}
       </div>
-      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4 mb-8">
-        {[1, 2, 3, 4, 5, 6, 7].map((i) => <div key={i} className="skeleton h-32 rounded-xl" />)}
+      <div className="space-y-3">
+        {[1,2,3].map(i => <div key={i} className="skeleton h-16 rounded-xl" />)}
       </div>
     </div>
   );
 }
 
-/* ── Dashboard Page ───────────────────────────────────────────────────── */
+/* ── Dashboard Page ─────────────────────────────────────────────────── */
+import React from "react";
+
 export function Dashboard() {
-  const [stats, setStats] = useState<DashboardStats>(MOCK_STATS);
-  const [isLoading, setIsLoading] = useState(true);
-  const [isDemoMode, setIsDemoMode] = useState(false);
+  const navigate = useNavigate();
+  const token = localStorage.getItem("access_token");
 
-  useEffect(() => {
-    const token = localStorage.getItem("access_token");
-    if (!token) {
-      setIsDemoMode(true);
-      setIsLoading(false);
-      return;
-    }
+  const { data: stats, isLoading: statsLoading } = useQuery({
+    queryKey: ["stats"],
+    queryFn: statsApi.dashboard,
+    enabled: !!token,
+  });
 
-    const baseUrl = import.meta.env.VITE_API_BASE_URL ?? "";
-    fetch(`${baseUrl}/stats/dashboard`, {
-      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-    })
-      .then(res => {
-        if (!res.ok) throw new Error("API error");
-        return res.json();
-      })
-      .then(data => {
-        if (data && typeof data.total_deadlines === "number") {
-          setStats(data);
-          setIsDemoMode(false);
-        } else {
-          setIsDemoMode(true);
-        }
-      })
-      .catch(() => {
-        setIsDemoMode(true);
-      })
-      .finally(() => setIsLoading(false));
-  }, []);
+  const { data: user } = useQuery({
+    queryKey: ["me"],
+    queryFn: authApi.me,
+    enabled: !!token,
+  });
 
-  const handleConnectGmail = () => {
-    if (isDemoMode) {
-      alert("Demo mode: Gmail connection would redirect to OAuth flow.");
-      return;
-    }
-    const token = localStorage.getItem("access_token");
-    const baseUrl = import.meta.env.VITE_API_BASE_URL ?? "";
-    fetch(`${baseUrl}/auth/connect/gmail`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${token ?? ""}`, "Content-Type": "application/json" },
-    })
-      .then(res => res.json())
-      .then(data => { if (data.redirect_url) window.location.href = data.redirect_url; })
-      .catch(() => alert("Could not connect to Gmail. Please try again."));
-  };
+  const { data: deadlines, isLoading: dlLoading } = useQuery({
+    queryKey: ["deadlines", "all"],
+    queryFn: () => deadlinesApi.list(),
+    enabled: !!token,
+  });
 
+  const isLoading = statsLoading || dlLoading;
   if (isLoading) return <DashboardSkeleton />;
+
+  const now = new Date();
+  const todayDeadlines = (deadlines ?? []).filter(dl =>
+    dl.status === "pending" &&
+    isWithinInterval(parseISO(dl.due_at), { start: now, end: endOfDay(addDays(now, 0)) })
+  );
+  const upcomingDeadlines = (deadlines ?? []).filter(dl =>
+    dl.status === "pending" &&
+    isWithinInterval(parseISO(dl.due_at), { start: startOfDay(addDays(now, 1)), end: endOfDay(addDays(now, 7)) })
+  );
+  const overdueDeadlines = (deadlines ?? []).filter(dl =>
+    dl.status === "pending" && isPast(parseISO(dl.due_at))
+  );
+
+  const displayName = user?.display_name ?? user?.email?.split("@")[0] ?? "there";
 
   return (
     <div>
-      {/* ── Header ──────────────────────────────────────────────── */}
-      <div className="flex items-center justify-between mb-8">
+      {/* ── Greeting ─────────────────────────────────────────────── */}
+      <div className="flex items-start justify-between mb-8 gap-4">
         <div>
-          <div className="flex items-center gap-2">
-            <h1 className="text-headline-md text-on-surface mb-1">Dashboard</h1>
-            {isDemoMode && <span className="text-label-sm bg-tertiary/10 text-tertiary px-2.5 py-1 rounded-full">Demo</span>}
-          </div>
-          <p className="text-body-md text-on-surface-variant">Your command center at a glance.</p>
+          <p className="text-label-sm text-on-surface-variant mb-1">{format(now, "EEEE, MMMM d")}</p>
+          <h1 className="text-headline-md text-on-surface mb-1">
+            {getGreeting()}, {displayName.charAt(0).toUpperCase() + displayName.slice(1)} 👋
+          </h1>
+          <p className="text-body-md text-on-surface-variant">Here's what needs your attention today.</p>
         </div>
-        <button id="connect-gmail-btn" onClick={handleConnectGmail}
-          className="btn-primary-gradient px-5 py-2.5 rounded-xl text-sm flex items-center gap-2 group">
-          <Plus className="w-4 h-4" />Connect Gmail
-          <ArrowUpRight className="w-3.5 h-3.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
+        <button
+          onClick={() => navigate("/deadlines/create")}
+          className="btn-primary-gradient px-4 py-2.5 rounded-xl text-sm flex items-center gap-2 group shrink-0"
+        >
+          <Plus className="w-4 h-4" />
+          <span className="hidden sm:inline">New Deadline</span>
+          <Plus className="w-4 h-4 sm:hidden" />
         </button>
       </div>
 
-      {/* ── Stats Grid ──────────────────────────────────────────── */}
-      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4 mb-8">
-        <StatCard label="Total Deadlines" value={stats.total_deadlines} icon={CalendarClock} />
-        <StatCard label="Pending" value={stats.pending_deadlines} icon={Clock} accent="text-tertiary" />
-        <StatCard label="Upcoming Reminders" value={stats.upcoming_reminders} icon={Bell} accent="text-tertiary" />
-        <StatCard label="Total Read" value={stats.total_emails_read} icon={Inbox} accent="text-primary" />
-        <StatCard label="Emails Today" value={stats.emails_processed_today} icon={Mail} accent="text-primary" />
-        <StatCard label="Important Today" value={stats.important_emails_today} icon={ShieldCheck} accent="text-secondary" />
-        <StatCard label="Connected" value={stats.connected_accounts} icon={Link2} accent="text-primary" />
+      {/* ── Stats Grid ───────────────────────────────────────────── */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+        <StatCard label="Pending Deadlines" value={stats?.pending_deadlines ?? 0} icon={CalendarClock} accent="text-tertiary" />
+        <StatCard label="Upcoming Reminders" value={stats?.upcoming_reminders ?? 0} icon={Bell} accent="text-primary" />
+        <StatCard label="Emails Today" value={stats?.emails_processed_today ?? 0} icon={Mail} accent="text-primary" />
+        <StatCard label="Connected Accounts" value={stats?.connected_accounts ?? 0} icon={Link2} accent="text-primary" />
       </div>
 
-      {/* ── AI Command Input ────────────────────────────────────── */}
-      <div className="bg-surface-container-high rounded-xl p-6 mb-8 animate-pulse-glow">
-        <div className="flex items-center gap-3 mb-3">
-          <Sparkles className="w-4 h-4 text-primary" />
-          <span className="text-label-sm text-primary">AI Assistant</span>
+      {/* ── Overdue Alert ────────────────────────────────────────── */}
+      {overdueDeadlines.length > 0 && (
+        <div className="bg-error/10 border border-error/20 rounded-xl p-4 mb-6 flex items-center gap-3 animate-slide-up">
+          <AlertTriangle className="w-5 h-5 text-error shrink-0" />
+          <div className="flex-1">
+            <p className="text-sm font-semibold text-error">
+              {overdueDeadlines.length} overdue deadline{overdueDeadlines.length !== 1 ? "s" : ""}
+            </p>
+            <p className="text-xs text-error/70 mt-0.5">These deadlines have passed without being completed.</p>
+          </div>
+          <button onClick={() => navigate("/deadlines")} className="text-xs font-semibold text-error underline underline-offset-2 shrink-0">
+            View all
+          </button>
         </div>
-        <div className="bg-surface-container rounded-xl px-5 py-4 ghost-border ghost-border-focus cursor-text">
-          <p className="text-title-md text-on-surface-variant/50">Ask AI to manage your reminders...</p>
+      )}
+
+      {/* ── Today Section ────────────────────────────────────────── */}
+      <div className="mb-8">
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-title-md text-on-surface font-semibold flex items-center gap-2">
+            <Clock className="w-4 h-4 text-primary" />
+            Due Today
+          </h2>
+          {todayDeadlines.length > 0 && (
+            <span className="text-xs text-on-surface-variant">{todayDeadlines.length} deadline{todayDeadlines.length !== 1 ? "s" : ""}</span>
+          )}
         </div>
+        {todayDeadlines.length === 0 ? (
+          <div className="bg-surface-container rounded-xl p-8 text-center border border-white/5">
+            <CheckCircle2 className="w-8 h-8 text-green-400 mx-auto mb-3" />
+            <p className="text-body-md text-on-surface font-medium">Free day</p>
+            <p className="text-xs text-on-surface-variant mt-1">Nothing due today. Great work!</p>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {todayDeadlines.map(dl => <MiniDeadlineCard key={dl.id} dl={dl} />)}
+          </div>
+        )}
       </div>
 
-      {/* ── Empty State ─────────────────────────────────────────── */}
-      {stats.connected_accounts === 0 && (
-        <div className="bg-surface-container rounded-2xl p-8 text-center animate-slide-up">
+      {/* ── Upcoming Section ─────────────────────────────────────── */}
+      <div className="mb-8">
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-title-md text-on-surface font-semibold flex items-center gap-2">
+            <CalendarClock className="w-4 h-4 text-tertiary" />
+            Upcoming (Next 7 Days)
+          </h2>
+          <button onClick={() => navigate("/deadlines")} className="text-xs text-primary hover:underline underline-offset-2">
+            View all
+          </button>
+        </div>
+        {upcomingDeadlines.length === 0 ? (
+          <div className="bg-surface-container rounded-xl p-6 text-center border border-white/5">
+            <p className="text-body-md text-on-surface-variant">Nothing scheduled for the next 7 days.</p>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {upcomingDeadlines.slice(0, 5).map(dl => <MiniDeadlineCard key={dl.id} dl={dl} />)}
+            {upcomingDeadlines.length > 5 && (
+              <button onClick={() => navigate("/deadlines")} className="w-full text-center text-xs text-on-surface-variant hover:text-primary transition-premium py-2">
+                +{upcomingDeadlines.length - 5} more deadlines →
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* ── No connection state ──────────────────────────────────── */}
+      {stats && stats.connected_accounts === 0 && (
+        <div className="bg-surface-container rounded-2xl p-8 text-center border border-white/5 animate-slide-up">
           <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-primary/10 to-primary-container/10 flex items-center justify-center mx-auto mb-5">
             <TrendingUp className="w-7 h-7 text-primary" />
           </div>
@@ -163,9 +230,10 @@ export function Dashboard() {
           <p className="text-body-md text-on-surface-variant max-w-sm mx-auto mb-6">
             Connect your Gmail account to start detecting deadlines automatically from your emails.
           </p>
-          <button onClick={handleConnectGmail} className="btn-primary-gradient px-6 py-3 rounded-xl text-sm inline-flex items-center gap-2">
-            <Mail className="w-4 h-4" />Connect Gmail
-          </button>
+          <div className="flex items-center gap-2 justify-center">
+            <Sparkles className="w-4 h-4 text-primary" />
+            <span className="text-xs text-on-surface-variant">AI processes your emails in the background — no manual work needed.</span>
+          </div>
         </div>
       )}
     </div>

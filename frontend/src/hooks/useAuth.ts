@@ -1,16 +1,12 @@
 import { useQuery } from "@tanstack/react-query";
-import { authApi } from "../api/auth";
+import { authApi } from "../api";
 
-export function useCurrentUser() {
+export function useAuth() {
   const token = localStorage.getItem("access_token");
-  return useQuery({
+  const { data: user, isLoading } = useQuery({
     queryKey: ["me"],
-    queryFn: authApi.getMe,
+    queryFn: authApi.me,
     enabled: !!token,
-    retry: false,
   });
-}
-
-export function isAuthenticated(): boolean {
-  return !!localStorage.getItem("access_token");
+  return { user, isLoading, isAuthenticated: !!token };
 }

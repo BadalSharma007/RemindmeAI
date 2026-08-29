@@ -1,35 +1,43 @@
 import { useEffect } from "react";
 import { Routes, Route, Navigate, useNavigate, useSearchParams } from "react-router-dom";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Layout } from "./components/shared/Layout";
 import { ProtectedRoute } from "./components/shared/ProtectedRoute";
 import { ErrorBoundary } from "./components/shared/ErrorBoundary";
 import { Dashboard } from "./components/Dashboard";
 import { Deadlines } from "./components/Deadlines";
+import { DeadlineDetail } from "./components/DeadlineDetail";
+import { CreateDeadline } from "./components/CreateDeadline";
 import { Reminders } from "./components/Reminders";
 import { Settings } from "./components/Settings";
-import { authApi } from "./api/auth";
+import { Search } from "./components/Search";
 import { Sparkles, ArrowRight, Shield, Zap, Brain } from "lucide-react";
 
-/* ──────────────────────────────────────────────────────────────────────
-   Login Page — Editorial Minimalism
-   ──────────────────────────────────────────────────────────────────── */
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      retry: 1,
+      staleTime: 30_000,
+      refetchOnWindowFocus: true,
+    },
+  },
+});
+
+/* ── Login Page ─────────────────────────────────────────────────────── */
 function LoginPage() {
   const handleLogin = () => {
-    // Build the redirect URL to point back to the web frontend's auth callback
     const redirectUrl = `${window.location.origin}/auth/callback`;
     const apiBase = import.meta.env.VITE_API_BASE_URL ?? "";
-    // Direct redirect to backend with redirect_url — avoids CORS preflight on POST
     window.location.href = `${apiBase}/auth/start/gmail?redirect_url=${encodeURIComponent(redirectUrl)}`;
   };
 
   return (
     <div className="min-h-screen bg-background font-inter flex items-center justify-center px-6 relative overflow-hidden">
-      {/* Ambient background glow */}
       <div className="absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] bg-primary/5 rounded-full blur-[120px] pointer-events-none" />
       <div className="absolute bottom-0 right-0 w-[400px] h-[400px] bg-tertiary/5 rounded-full blur-[100px] pointer-events-none" />
 
       <div className="relative z-10 w-full max-w-md animate-slide-up">
-        {/* Brand Mark */}
+        {/* Brand */}
         <div className="flex items-center justify-center gap-3 mb-10">
           <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-primary to-primary-container flex items-center justify-center shadow-glow">
             <Sparkles className="w-6 h-6 text-on-primary" />
@@ -40,37 +48,28 @@ function LoginPage() {
         </div>
 
         {/* Card */}
-        <div className="bg-surface-container rounded-2xl p-8 shadow-ambient">
+        <div className="bg-surface-container rounded-2xl p-8 shadow-ambient border border-white/5">
           <div className="text-center mb-8">
-            <p className="text-label-sm text-on-surface-variant mb-3">
-              Welcome Back
-            </p>
-            <h2 className="text-title-md text-on-surface mb-2">
-              Sign in to your workspace
-            </h2>
+            <p className="text-label-sm text-on-surface-variant mb-3">Welcome Back</p>
+            <h2 className="text-title-md text-on-surface mb-2">Sign in to your workspace</h2>
             <p className="text-body-md text-on-surface-variant">
               Your intelligent email-based reminder system awaits.
             </p>
           </div>
 
-          {/* Feature Pills */}
           <div className="flex flex-wrap justify-center gap-2 mb-8">
             {[
               { icon: Brain, label: "AI-Powered" },
               { icon: Shield, label: "Secure" },
               { icon: Zap, label: "Real-time" },
-            ].map((feature) => (
-              <span
-                key={feature.label}
-                className="chip-unselected flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium"
-              >
-                <feature.icon className="w-3 h-3 text-primary" />
-                {feature.label}
+            ].map((f) => (
+              <span key={f.label} className="chip-unselected flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium">
+                <f.icon className="w-3 h-3 text-primary" />
+                {f.label}
               </span>
             ))}
           </div>
 
-          {/* CTA */}
           <button
             id="login-btn-gmail"
             onClick={handleLogin}
@@ -85,10 +84,13 @@ function LoginPage() {
             Sign in with Gmail
             <ArrowRight className="w-4 h-4 transition-transform group-hover:translate-x-1" />
           </button>
+
+          <p className="text-center text-xs text-on-surface-variant/50 mt-5">
+            RemindMeAI reads your Gmail to detect deadlines. No emails are stored — only subject &amp; snippet.
+          </p>
         </div>
 
-        {/* Footer */}
-        <p className="text-center text-xs text-on-surface-variant/50 mt-8">
+        <p className="text-center text-xs text-on-surface-variant/30 mt-6">
           By signing in, you agree to our Terms of Service and Privacy Policy.
         </p>
       </div>
@@ -96,9 +98,7 @@ function LoginPage() {
   );
 }
 
-/* ──────────────────────────────────────────────────────────────────────
-   Auth Callback
-   ──────────────────────────────────────────────────────────────────── */
+/* ── Auth Callback ───────────────────────────────────────────────────── */
 function AuthCallbackPage() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
@@ -117,8 +117,8 @@ function AuthCallbackPage() {
 
   return (
     <div className="min-h-screen bg-background flex items-center justify-center">
-      <div className="flex flex-col items-center gap-4 animate-pulse">
-        <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-primary to-primary-container flex items-center justify-center shadow-glow">
+      <div className="flex flex-col items-center gap-4">
+        <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-primary to-primary-container flex items-center justify-center shadow-glow animate-pulse">
           <Sparkles className="w-5 h-5 text-on-primary" />
         </div>
         <p className="text-on-surface-variant text-sm">Signing you in...</p>
@@ -127,34 +127,37 @@ function AuthCallbackPage() {
   );
 }
 
-/* ──────────────────────────────────────────────────────────────────────
-   App Router
-   ──────────────────────────────────────────────────────────────────── */
+/* ── App Router ─────────────────────────────────────────────────────── */
 export default function App() {
   return (
-    <ErrorBoundary>
-      <Routes>
-        <Route path="/login" element={<LoginPage />} />
-        <Route path="/auth/callback" element={<AuthCallbackPage />} />
-        <Route
-          path="/*"
-          element={
-            <ProtectedRoute>
-              <Layout>
-                <ErrorBoundary>
-                  <Routes>
-                    <Route path="/" element={<Dashboard />} />
-                    <Route path="/deadlines" element={<Deadlines />} />
-                    <Route path="/reminders" element={<Reminders />} />
-                    <Route path="/settings" element={<Settings />} />
-                    <Route path="*" element={<Navigate to="/" replace />} />
-                  </Routes>
-                </ErrorBoundary>
-              </Layout>
-            </ProtectedRoute>
-          }
-        />
-      </Routes>
-    </ErrorBoundary>
+    <QueryClientProvider client={queryClient}>
+      <ErrorBoundary>
+        <Routes>
+          <Route path="/login" element={<LoginPage />} />
+          <Route path="/auth/callback" element={<AuthCallbackPage />} />
+          <Route
+            path="/*"
+            element={
+              <ProtectedRoute>
+                <Layout>
+                  <ErrorBoundary>
+                    <Routes>
+                      <Route path="/" element={<Dashboard />} />
+                      <Route path="/deadlines" element={<Deadlines />} />
+                      <Route path="/deadlines/create" element={<CreateDeadline />} />
+                      <Route path="/deadlines/:id" element={<DeadlineDetail />} />
+                      <Route path="/reminders" element={<Reminders />} />
+                      <Route path="/settings" element={<Settings />} />
+                      <Route path="/search" element={<Search />} />
+                      <Route path="*" element={<Navigate to="/" replace />} />
+                    </Routes>
+                  </ErrorBoundary>
+                </Layout>
+              </ProtectedRoute>
+            }
+          />
+        </Routes>
+      </ErrorBoundary>
+    </QueryClientProvider>
   );
 }

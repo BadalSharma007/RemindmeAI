@@ -7,27 +7,37 @@ export interface Deadline {
   due_at: string;
   confidence_score: number;
   source_text: string | null;
-  status: "pending" | "reminded" | "dismissed" | "completed";
+  status: "pending" | "reminded" | "completed" | "dismissed";
+  created_at?: string | null;
+}
+
+export interface DeadlineCreate {
+  title: string;
+  due_at: string;
+  source_text?: string;
 }
 
 export interface DeadlinePatch {
-  status?: Deadline["status"];
+  status?: "pending" | "reminded" | "completed" | "dismissed";
   title?: string;
 }
 
 export const deadlinesApi = {
-  getDeadlines: async (params?: { status?: string; limit?: number }): Promise<Deadline[]> => {
-    const response = await apiClient.get("/deadlines", { params });
-    return response.data;
-  },
+  list: (status?: string) =>
+    apiClient.get<Deadline[]>("/deadlines", { params: { limit: 200, ...(status && status !== "all" ? { status } : {}) } }).then(r => r.data),
 
-  getDeadline: async (id: string): Promise<Deadline> => {
-    const response = await apiClient.get(`/deadlines/${id}`);
-    return response.data;
-  },
+  get: (id: string) =>
+    apiClient.get<Deadline>(`/deadlines/${id}`).then(r => r.data),
 
-  patchDeadline: async (id: string, patch: DeadlinePatch): Promise<Deadline> => {
-    const response = await apiClient.patch(`/deadlines/${id}`, patch);
-    return response.data;
-  },
+  create: (body: DeadlineCreate) =>
+    apiClient.post<Deadline>("/deadlines", body).then(r => r.data),
+
+  patch: (id: string, body: DeadlinePatch) =>
+    apiClient.patch<Deadline>(`/deadlines/${id}`, body).then(r => r.data),
+
+  delete: (id: string) =>
+    apiClient.delete(`/deadlines/${id}`),
+
+  feedback: (id: string, helpful: boolean) =>
+    apiClient.post(`/deadlines/${id}/feedback`, { helpful }),
 };

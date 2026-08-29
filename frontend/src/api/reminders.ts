@@ -6,20 +6,30 @@ export interface Reminder {
   user_id: string;
   scheduled_at: string;
   channel: string;
-  status: "pending" | "sent" | "failed" | "snoozed";
+  status: "pending" | "sent" | "failed" | "snoozed" | "dismissed";
   sent_at: string | null;
+  snooze_until: string | null;
+}
+
+export interface ReminderCreate {
+  deadline_id: string;
+  scheduled_at: string;
+  channel?: string;
 }
 
 export const remindersApi = {
-  getReminders: async (params?: { status?: string; limit?: number }): Promise<Reminder[]> => {
-    const response = await apiClient.get("/reminders", { params });
-    return response.data;
-  },
+  list: (status?: string) =>
+    apiClient.get<Reminder[]>("/reminders", { params: { limit: 200, ...(status && status !== "all" ? { status } : {}) } }).then(r => r.data),
 
-  snooze: async (id: string, snoozeUntil: string): Promise<Reminder> => {
-    const response = await apiClient.post(`/reminders/${id}/snooze`, {
-      snooze_until: snoozeUntil,
-    });
-    return response.data;
-  },
+  create: (body: ReminderCreate) =>
+    apiClient.post<Reminder>("/reminders", body).then(r => r.data),
+
+  patch: (id: string, body: Partial<{ scheduled_at: string; channel: string }>) =>
+    apiClient.patch<Reminder>(`/reminders/${id}`, body).then(r => r.data),
+
+  dismiss: (id: string) =>
+    apiClient.post(`/reminders/${id}/dismiss`),
+
+  snooze: (id: string, snooze_until: string) =>
+    apiClient.post<Reminder>(`/reminders/${id}/snooze`, { snooze_until }).then(r => r.data),
 };
