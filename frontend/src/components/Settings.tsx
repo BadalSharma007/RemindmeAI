@@ -2,10 +2,11 @@ import React, { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Settings as SettingsIcon, User, Bell, AlertTriangle,
-  LogOut, Unplug, Save, CheckCircle2, Shield, Globe, Mail,
+  LogOut, Unplug, Save, Shield, Globe, Mail,
 } from "lucide-react";
 import { authApi, preferencesApi } from "../api";
 import { ConfirmDialog } from "./shared/ConfirmDialog";
+import { useToast } from "./ui/Toast";
 
 const LEAD_OPTIONS = [
   { label: "15 minutes", value: 15 },
@@ -13,6 +14,21 @@ const LEAD_OPTIONS = [
   { label: "1 hour", value: 60 },
   { label: "2 hours", value: 120 },
   { label: "4 hours", value: 240 },
+];
+
+const TIMEZONE_OPTIONS = [
+  "Asia/Kolkata",
+  "America/New_York",
+  "America/Los_Angeles",
+  "America/Chicago",
+  "Europe/London",
+  "Europe/Paris",
+  "Europe/Berlin",
+  "Asia/Dubai",
+  "Asia/Singapore",
+  "Asia/Tokyo",
+  "Australia/Sydney",
+  "UTC",
 ];
 
 function SettingSection({ title, icon: Icon, accent = "text-primary", children }: {
@@ -42,10 +58,11 @@ function SettingRow({ label, children }: { label: string; children: React.ReactN
 
 export function Settings() {
   const qc = useQueryClient();
+  const { showToast } = useToast();
   const storedEmail = localStorage.getItem("user_email");
 
   const [leadMinutes, setLeadMinutes] = useState(60);
-  const [saved, setSaved] = useState(false);
+  const [selectedTz, setSelectedTz] = useState("Asia/Kolkata");
   const [showDisconnect, setShowDisconnect] = useState(false);
   const [showLogout, setShowLogout] = useState(false);
 
@@ -63,20 +80,38 @@ export function Settings() {
     if (prefs?.reminder_lead_minutes) {
       setLeadMinutes(prefs.reminder_lead_minutes);
     }
-  }, [prefs]);
+    if (prefs?.timezone) {
+      setSelectedTz(prefs.timezone);
+    } else if (user?.timezone) {
+      setSelectedTz(user.timezone);
+    }
+  }, [prefs, user]);
 
   const savePrefsMut = useMutation({
-    mutationFn: () => preferencesApi.update({ reminder_lead_minutes: leadMinutes }),
+    mutationFn: () =>
+      preferencesApi.update({
+        reminder_lead_minutes: leadMinutes,
+        timezone: selectedTz,
+      }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["preferences"] });
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
+      qc.invalidateQueries({ queryKey: ["me"] });
+      showToast("Preferences saved successfully!", "success");
+    },
+    onError: () => {
+      showToast("Could not update preferences.", "error");
     },
   });
 
   const disconnectMut = useMutation({
     mutationFn: () => authApi.disconnect("gmail"),
-    onSuccess: () => window.location.reload(),
+    onSuccess: () => {
+      showToast("Gmail disconnected.", "info");
+      window.location.reload();
+    },
+    onError: () => {
+      showToast("Failed to disconnect Gmail.", "error");
+    },
   });
 
   const handleLogout = () => {
@@ -86,7 +121,11 @@ export function Settings() {
   };
 
   const initials = (user?.display_name ?? user?.email ?? storedEmail ?? "?")
-    .split(" ").map((n: string) => n[0]).join("").toUpperCase().slice(0, 2);
+    .split(" ")
+    .map((n: string) => n[0])
+    .join("")
+    .toUpperCase()
+    .slice(0, 2);
 
   return (
     <div>
@@ -115,11 +154,21 @@ export function Settings() {
           </div>
           <div className="space-y-0">
             <SettingRow label="Email">{user?.email ?? storedEmail ?? "—"}</SettingRow>
-            <SettingRow label="Timezone">
-              <span className="flex items-center gap-1.5">
-                <Globe className="w-3.5 h-3.5 text-on-surface-variant/50" />
-                {user?.timezone ?? prefs?.timezone ?? "UTC"}
-              </span>
+            <SettingRow label="Configured Timezone">
+              <div className="flex items-center gap-2">
+                <Globe className="w-4 h-4 text-primary shrink-0" />
+                <select
+                  value={selectedTz}
+                  onChange={(e) => setSelectedTz(e.target.value)}
+                  className="bg-surface-container-high text-on-surface text-xs rounded-lg px-2.5 py-1.5 border border-white/5 font-medium"
+                >
+                  {TIMEZONE_OPTIONS.map((tz) => (
+                    <option key={tz} value={tz}>
+                      {tz}
+                    </option>
+                  ))}
+                </select>
+              </div>
             </SettingRow>
           </div>
         </SettingSection>
@@ -150,18 +199,28 @@ export function Settings() {
               Remind me before deadline
             </label>
             <div className="flex flex-wrap gap-2 mb-4">
-              {LEAD_OPTIONS.map(opt => (
-                <button key={opt.value} onClick={() => setLeadMinutes(opt.value)}
-                  className={`px-4 py-2 rounded-xl text-sm font-semibold transition-premium ${leadMinutes === opt.value ? "chip-selected" : "chip-unselected hover:bg-surface-container-high"}`}>
+              {LEAD_OPTIONS.map((opt) => (
+                <button
+                  key={opt.value}
+                  onClick={() => setLeadMinutes(opt.value)}
+                  className={`px-4 py-2 rounded-xl text-sm font-semibold transition-premium ${
+                    leadMinutes === opt.value
+                      ? "chip-selected"
+                      : "chip-unselected hover:bg-surface-container-high"
+                  }`}
+                >
                   {opt.label}
                 </button>
               ))}
             </div>
-            <button onClick={() => savePrefsMut.mutate()} disabled={savePrefsMut.isPending}
-              className={`flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold transition-premium disabled:opacity-50 ${saved ? "bg-green-500/10 text-green-400" : "btn-primary-gradient"}`}>
-              {saved ? <><CheckCircle2 className="w-4 h-4" />Saved!</> : <><Save className="w-4 h-4" />Save Preferences</>}
+            <button
+              onClick={() => savePrefsMut.mutate()}
+              disabled={savePrefsMut.isPending}
+              className="btn-primary-gradient px-5 py-2.5 rounded-xl text-sm font-semibold flex items-center gap-2"
+            >
+              <Save className="w-4 h-4" />
+              {savePrefsMut.isPending ? "Saving..." : "Save Preferences"}
             </button>
-            {savePrefsMut.isError && <p className="text-xs text-error mt-2">Failed to save. Try again.</p>}
           </div>
         </SettingSection>
 
@@ -171,28 +230,40 @@ export function Settings() {
             <div className="p-4 bg-surface-container-high rounded-xl space-y-2">
               <p className="font-semibold text-on-surface">What RemindmeAI accesses:</p>
               <ul className="space-y-1 text-xs">
-                <li>✅ Gmail readonly (subject + first 500 chars)</li>
+                <li>✅ Gmail readonly (subject + snippet)</li>
                 <li>✅ Your email address and name</li>
                 <li>❌ Full email body (never stored)</li>
                 <li>❌ Attachments (never accessed)</li>
                 <li>❌ Sent emails or drafts</li>
               </ul>
             </div>
-            <p className="text-xs">Emails are processed in the background. Only the subject and snippet are stored for deadline detection. You can disconnect at any time.</p>
+            <p className="text-xs">
+              Emails are processed in the background. Only the subject and snippet are stored for deadline detection.
+              You can disconnect at any time.
+            </p>
           </div>
         </SettingSection>
 
         {/* Danger Zone */}
         <SettingSection title="Account" icon={AlertTriangle} accent="text-error">
           <div className="space-y-3">
-            <button id="logout-btn" onClick={() => setShowLogout(true)}
-              className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-surface-container-high text-on-surface-variant text-sm font-semibold hover:bg-surface-container-highest hover:text-on-surface transition-premium w-full">
+            <button
+              id="logout-btn"
+              onClick={() => setShowLogout(true)}
+              className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-surface-container-high text-on-surface-variant text-sm font-semibold hover:bg-surface-container-highest hover:text-on-surface transition-premium w-full"
+            >
               <LogOut className="w-4 h-4" />Log out
             </button>
             <div className="pt-1 border-t border-white/5">
-              <p className="text-xs text-on-surface-variant mb-3">Disconnecting Gmail will revoke access and stop processing your emails. Your existing deadlines will remain.</p>
-              <button id="disconnect-gmail-btn" onClick={() => setShowDisconnect(true)}
-                className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-error/10 text-error text-sm font-semibold hover:bg-error/20 transition-premium">
+              <p className="text-xs text-on-surface-variant mb-3">
+                Disconnecting Gmail will revoke access and stop processing your emails. Your existing deadlines will
+                remain.
+              </p>
+              <button
+                id="disconnect-gmail-btn"
+                onClick={() => setShowDisconnect(true)}
+                className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-error/10 text-error text-sm font-semibold hover:bg-error/20 transition-premium"
+              >
                 <Unplug className="w-4 h-4" />Disconnect Gmail
               </button>
             </div>

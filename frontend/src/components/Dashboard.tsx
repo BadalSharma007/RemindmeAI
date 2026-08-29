@@ -1,13 +1,16 @@
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { format, parseISO, isPast, isToday, isTomorrow, isWithinInterval, addDays, startOfDay, endOfDay } from "date-fns";
 import {
   CalendarClock, Clock, Bell, Mail, Link2, Plus,
   Sparkles, TrendingUp, ArrowRight, CheckCircle2, AlertTriangle,
+  Calendar as CalendarIcon, HelpCircle
 } from "lucide-react";
 import { statsApi, authApi } from "../api";
 import { deadlinesApi, type Deadline } from "../api/deadlines";
 import { getDeadlineUrgency } from "../utils/urgency";
+import { Onboarding } from "./Onboarding";
 
 /* ── Helpers ────────────────────────────────────────────────────────── */
 function getGreeting() {
@@ -96,6 +99,7 @@ function DashboardSkeleton() {
 export function Dashboard() {
   const navigate = useNavigate();
   const token = localStorage.getItem("access_token");
+  const [showOnboarding, setShowOnboarding] = useState(false);
 
   const { data: stats, isLoading: statsLoading } = useQuery({
     queryKey: ["stats"],
@@ -115,6 +119,12 @@ export function Dashboard() {
     enabled: !!token,
   });
 
+  const handleConnectGmail = () => {
+    const apiBase = import.meta.env.VITE_API_BASE_URL ?? "";
+    const redirectUrl = `${window.location.origin}/auth/callback`;
+    window.location.href = `${apiBase}/auth/start/gmail?redirect_url=${encodeURIComponent(redirectUrl)}`;
+  };
+
   const isLoading = statsLoading || dlLoading;
   if (isLoading) return <DashboardSkeleton />;
 
@@ -131,12 +141,16 @@ export function Dashboard() {
     dl.status === "pending" && isPast(parseISO(dl.due_at))
   );
 
+  const pendingReviewCount = (deadlines ?? []).filter(
+    d => d.status === "pending" && d.source_text && d.source_text !== "Manual entry"
+  ).length;
+
   const displayName = user?.display_name ?? user?.email?.split("@")[0] ?? "there";
 
   return (
     <div>
       {/* ── Greeting ─────────────────────────────────────────────── */}
-      <div className="flex items-start justify-between mb-8 gap-4">
+      <div className="flex items-start justify-between mb-8 gap-4 flex-wrap">
         <div>
           <p className="text-label-sm text-on-surface-variant mb-1">{format(now, "EEEE, MMMM d")}</p>
           <h1 className="text-headline-md text-on-surface mb-1">
@@ -144,13 +158,30 @@ export function Dashboard() {
           </h1>
           <p className="text-body-md text-on-surface-variant">Here's what needs your attention today.</p>
         </div>
-        <button
-          onClick={() => navigate("/deadlines/create")}
-          className="btn-primary-gradient px-4 py-2.5 rounded-xl text-sm flex items-center gap-2 group shrink-0"
-        >
-          <Plus className="w-4 h-4" />
-          <span className="hidden sm:inline">New Deadline</span>
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setShowOnboarding(true)}
+            className="p-2.5 rounded-xl bg-surface-container hover:bg-surface-container-high border border-white/5 text-on-surface-variant hover:text-on-surface text-xs font-semibold flex items-center gap-1.5 transition-premium"
+            title="How it works"
+          >
+            <HelpCircle className="w-4 h-4 text-primary" />
+            <span className="hidden sm:inline">Guide</span>
+          </button>
+          <button
+            onClick={() => navigate("/calendar")}
+            className="p-2.5 rounded-xl bg-surface-container hover:bg-surface-container-high border border-white/5 text-on-surface-variant hover:text-on-surface text-xs font-semibold flex items-center gap-1.5 transition-premium"
+          >
+            <CalendarIcon className="w-4 h-4 text-primary" />
+            <span className="hidden sm:inline">Calendar</span>
+          </button>
+          <button
+            onClick={() => navigate("/deadlines/create")}
+            className="btn-primary-gradient px-4 py-2.5 rounded-xl text-sm flex items-center gap-2 group shrink-0"
+          >
+            <Plus className="w-4 h-4" />
+            <span className="hidden sm:inline">New Deadline</span>
+          </button>
+        </div>
       </div>
 
       {/* ── Stats Grid ───────────────────────────────────────────── */}
@@ -161,7 +192,32 @@ export function Dashboard() {
         <StatCard label="Connected Accounts" value={stats?.connected_accounts ?? 0} icon={Link2} accent="text-primary" />
       </div>
 
-      {/* ── Dynamic Urgency Banner ────────────────────────────────── */}
+      {/* ── AI Detection Review Banner ────────────────────────────── */}
+      {pendingReviewCount > 0 && (
+        <div className="bg-primary/10 border border-primary/30 rounded-xl p-4 mb-6 flex items-center justify-between gap-3 animate-slide-up shadow-glow">
+          <div className="flex items-center gap-3">
+            <div className="p-2 rounded-lg bg-primary/20 text-primary">
+              <Sparkles className="w-5 h-5" />
+            </div>
+            <div>
+              <p className="text-sm font-bold text-on-surface">
+                {pendingReviewCount} AI-detected deadline{pendingReviewCount !== 1 ? "s" : ""} need verification
+              </p>
+              <p className="text-xs text-on-surface-variant/80 mt-0.5">
+                Review extracted dates and confirm or adjust them in one click.
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={() => navigate("/review")}
+            className="btn-primary-gradient px-4 py-2 rounded-xl text-xs font-bold shrink-0 flex items-center gap-1.5"
+          >
+            Review Now <ArrowRight className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
+
+      {/* ── Dynamic Urgency Critical Alert Banner ─────────────────── */}
       {overdueDeadlines.length > 0 && (
         <div className="bg-red-500/10 border border-red-500/30 rounded-xl p-4 mb-6 flex items-center gap-3 animate-slide-up">
           <AlertTriangle className="w-5 h-5 text-red-400 shrink-0" />
@@ -247,12 +303,21 @@ export function Dashboard() {
           <p className="text-body-md text-on-surface-variant max-w-sm mx-auto mb-6">
             Connect your Gmail account to start detecting deadlines automatically from your emails.
           </p>
-          <div className="flex items-center gap-2 justify-center">
-            <Sparkles className="w-4 h-4 text-primary" />
-            <span className="text-xs text-on-surface-variant">AI processes your emails in the background — no manual work needed.</span>
-          </div>
+          <button
+            onClick={() => setShowOnboarding(true)}
+            className="btn-primary-gradient px-6 py-3 rounded-xl text-sm inline-flex items-center gap-2 font-semibold"
+          >
+            <Sparkles className="w-4 h-4" /> Start Guided Setup
+          </button>
         </div>
       )}
+
+      {/* Onboarding Walkthrough */}
+      <Onboarding
+        isOpen={showOnboarding}
+        onClose={() => setShowOnboarding(false)}
+        onConnectGmail={handleConnectGmail}
+      />
     </div>
   );
 }

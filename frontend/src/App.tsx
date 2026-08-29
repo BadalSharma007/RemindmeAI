@@ -1,6 +1,8 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { Routes, Route, Navigate, useNavigate, useSearchParams } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { UserProvider } from "./context/UserContext";
+import { ToastProvider } from "./components/ui/Toast";
 import { Layout } from "./components/shared/Layout";
 import { ProtectedRoute } from "./components/shared/ProtectedRoute";
 import { ErrorBoundary } from "./components/shared/ErrorBoundary";
@@ -8,9 +10,13 @@ import { Dashboard } from "./components/Dashboard";
 import { Deadlines } from "./components/Deadlines";
 import { DeadlineDetail } from "./components/DeadlineDetail";
 import { CreateDeadline } from "./components/CreateDeadline";
+import { EditDeadline } from "./components/EditDeadline";
 import { Reminders } from "./components/Reminders";
 import { Settings } from "./components/Settings";
 import { Search } from "./components/Search";
+import { AIReview } from "./components/AIReview";
+import { Calendar } from "./components/Calendar";
+import { Subscriptions } from "./components/Subscriptions";
 import { Sparkles, ArrowRight, Shield, Zap, Brain } from "lucide-react";
 
 const queryClient = new QueryClient({
@@ -113,7 +119,7 @@ function AuthCallbackPage() {
     } else {
       navigate("/login", { replace: true });
     }
-  }, []);
+  }, [searchParams, navigate]);
 
   return (
     <div className="min-h-screen bg-background flex items-center justify-center">
@@ -131,33 +137,41 @@ function AuthCallbackPage() {
 export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <ErrorBoundary>
-        <Routes>
-          <Route path="/login" element={<LoginPage />} />
-          <Route path="/auth/callback" element={<AuthCallbackPage />} />
-          <Route
-            path="/*"
-            element={
-              <ProtectedRoute>
-                <Layout>
-                  <ErrorBoundary>
-                    <Routes>
-                      <Route path="/" element={<Dashboard />} />
-                      <Route path="/deadlines" element={<Deadlines />} />
-                      <Route path="/deadlines/create" element={<CreateDeadline />} />
-                      <Route path="/deadlines/:id" element={<DeadlineDetail />} />
-                      <Route path="/reminders" element={<Reminders />} />
-                      <Route path="/settings" element={<Settings />} />
-                      <Route path="/search" element={<Search />} />
-                      <Route path="*" element={<Navigate to="/" replace />} />
-                    </Routes>
-                  </ErrorBoundary>
-                </Layout>
-              </ProtectedRoute>
-            }
-          />
-        </Routes>
-      </ErrorBoundary>
+      <UserProvider>
+        <ToastProvider>
+          <ErrorBoundary>
+            <Routes>
+              <Route path="/login" element={<LoginPage />} />
+              <Route path="/auth/callback" element={<AuthCallbackPage />} />
+              <Route
+                path="/*"
+                element={
+                  <ProtectedRoute>
+                    <Layout>
+                      <ErrorBoundary>
+                        <Routes>
+                          <Route path="/" element={<Dashboard />} />
+                          <Route path="/deadlines" element={<Deadlines />} />
+                          <Route path="/deadlines/create" element={<CreateDeadline />} />
+                          <Route path="/deadlines/:id" element={<DeadlineDetail />} />
+                          <Route path="/deadlines/:id/edit" element={<EditDeadline />} />
+                          <Route path="/reminders" element={<Reminders />} />
+                          <Route path="/calendar" element={<Calendar />} />
+                          <Route path="/review" element={<AIReview />} />
+                          <Route path="/subscriptions" element={<Subscriptions />} />
+                          <Route path="/settings" element={<Settings />} />
+                          <Route path="/search" element={<Search />} />
+                          <Route path="*" element={<Navigate to="/" replace />} />
+                        </Routes>
+                      </ErrorBoundary>
+                    </Layout>
+                  </ProtectedRoute>
+                }
+              />
+            </Routes>
+          </ErrorBoundary>
+        </ToastProvider>
+      </UserProvider>
     </QueryClientProvider>
   );
 }

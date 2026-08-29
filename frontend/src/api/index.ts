@@ -38,3 +38,16 @@ export interface DashboardStats {
 export const statsApi = {
   dashboard: () => apiClient.get<DashboardStats>("/stats/dashboard").then(r => r.data),
 };
+
+export interface Subscription {
+  id: string;
+  sender_name?: string;
+  sender_email: string;
+  created_at?: string;
+  status?: string;
+}
+
+export const subscriptionsApi = {
+  list: () => apiClient.get<Subscription[]>("/subscriptions").then(r => r.data),
+  unsubscribe: (id: string) => apiClient.post(`/subscriptions/${id}/unsubscribe`).then(r => r.data),
+};

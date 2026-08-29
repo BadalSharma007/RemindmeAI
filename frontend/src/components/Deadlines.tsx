@@ -4,10 +4,12 @@ import { useNavigate } from "react-router-dom";
 import { format, parseISO, formatDistanceToNow, isToday, isTomorrow } from "date-fns";
 import {
   CalendarClock, Check, X, Clock, AlertTriangle, CheckCircle2, XCircle,
-  Filter, Search, Plus, Sparkles, ArrowRight,
+  Filter, Search, Plus, Sparkles, ArrowRight, CheckSquare, Square, Trash2
 } from "lucide-react";
 import { deadlinesApi, type Deadline } from "../api/deadlines";
 import { getDeadlineUrgency } from "../utils/urgency";
+import { useToast } from "./ui/Toast";
+import { ConfirmDialog } from "./shared/ConfirmDialog";
 
 const STATUS_CONFIG: Record<string, { bg: string; text: string; icon: React.ElementType; label: string }> = {
   pending: { bg: "bg-amber-500/10", text: "text-amber-400", icon: Clock, label: "Pending" },
@@ -35,40 +37,14 @@ function DeadlinesSkeleton() {
   );
 }
 
-function EmptyState({ filter, search }: { filter: string; search: string }) {
-  const navigate = useNavigate();
-  const messages: Record<string, { title: string; desc: string }> = {
-    all: { title: "No deadlines yet", desc: "Connect Gmail or create a deadline manually." },
-    pending: { title: "No pending deadlines", desc: "You're all caught up! Nothing pending right now." },
-    completed: { title: "Nothing completed yet", desc: "Mark deadlines done as you finish them." },
-    dismissed: { title: "No dismissed deadlines", desc: "Dismissed deadlines will appear here." },
-    reminded: { title: "No reminded deadlines", desc: "Reminders that have fired will appear here." },
-  };
-  const msg = search
-    ? { title: "No matches found", desc: `No deadlines matching "${search}"` }
-    : messages[filter] ?? messages.all;
-
-  return (
-    <div className="bg-surface-container rounded-2xl p-12 text-center border border-white/5 animate-slide-up">
-      <div className="w-16 h-16 rounded-2xl bg-surface-container-high flex items-center justify-center mx-auto mb-5">
-        <CalendarClock className="w-7 h-7 text-on-surface-variant/40" />
-      </div>
-      <h3 className="text-title-md text-on-surface mb-2">{msg.title}</h3>
-      <p className="text-body-md text-on-surface-variant max-w-sm mx-auto mb-6">{msg.desc}</p>
-      {!search && filter === "all" && (
-        <button onClick={() => navigate("/deadlines/create")} className="btn-primary-gradient px-5 py-2.5 rounded-xl text-sm inline-flex items-center gap-2">
-          <Plus className="w-4 h-4" /> Create Deadline
-        </button>
-      )}
-    </div>
-  );
-}
-
 export function Deadlines() {
   const navigate = useNavigate();
   const qc = useQueryClient();
+  const { showToast } = useToast();
   const [activeFilter, setActiveFilter] = useState("all");
   const [searchQuery, setSearchQuery] = useState("");
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [showBulkDelete, setShowBulkDelete] = useState(false);
 
   const { data: deadlines = [], isLoading, isError, refetch } = useQuery({
     queryKey: ["deadlines", "all"],
@@ -88,6 +64,7 @@ export function Deadlines() {
     },
     onError: (_err, _vars, ctx) => {
       qc.setQueryData(["deadlines", "all"], ctx?.prev);
+      showToast("Could not update deadline status.", "error");
     },
     onSettled: () => qc.invalidateQueries({ queryKey: ["deadlines"] }),
   });
@@ -95,7 +72,47 @@ export function Deadlines() {
   const feedbackMut = useMutation({
     mutationFn: ({ id, helpful }: { id: string; helpful: boolean }) =>
       deadlinesApi.feedback(id, helpful),
+    onSuccess: () => showToast("Feedback recorded!", "success"),
   });
+
+  // Bulk actions
+  const toggleSelect = (id: string) => {
+    setSelectedIds(prev => prev.includes(id) ? prev.filter(item => item !== id) : [...prev, id]);
+  };
+
+  const handleBulkComplete = async () => {
+    try {
+      await Promise.all(selectedIds.map(id => deadlinesApi.patch(id, { status: "completed" })));
+      qc.invalidateQueries({ queryKey: ["deadlines"] });
+      showToast(`Marked ${selectedIds.length} deadlines complete!`, "success");
+      setSelectedIds([]);
+    } catch {
+      showToast("Failed to complete some items.", "error");
+    }
+  };
+
+  const handleBulkDismiss = async () => {
+    try {
+      await Promise.all(selectedIds.map(id => deadlinesApi.patch(id, { status: "dismissed" })));
+      qc.invalidateQueries({ queryKey: ["deadlines"] });
+      showToast(`Dismissed ${selectedIds.length} deadlines.`, "info");
+      setSelectedIds([]);
+    } catch {
+      showToast("Failed to dismiss some items.", "error");
+    }
+  };
+
+  const handleBulkDelete = async () => {
+    try {
+      await Promise.all(selectedIds.map(id => deadlinesApi.delete(id)));
+      qc.invalidateQueries({ queryKey: ["deadlines"] });
+      showToast(`Deleted ${selectedIds.length} deadlines.`, "success");
+      setSelectedIds([]);
+      setShowBulkDelete(false);
+    } catch {
+      showToast("Failed to delete some items.", "error");
+    }
+  };
 
   if (isLoading) return <DeadlinesSkeleton />;
 
@@ -172,9 +189,53 @@ export function Deadlines() {
         </div>
       </div>
 
+      {/* Bulk Action Bar when items selected */}
+      {selectedIds.length > 0 && (
+        <div className="bg-surface-container-high border border-primary/30 rounded-xl p-3 mb-4 flex items-center justify-between gap-3 animate-slide-up shadow-glow">
+          <span className="text-xs font-bold text-on-surface">
+            {selectedIds.length} item{selectedIds.length !== 1 ? "s" : ""} selected
+          </span>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleBulkComplete}
+              className="px-3 py-1.5 rounded-lg bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 text-xs font-bold transition-premium flex items-center gap-1"
+            >
+              <Check className="w-3.5 h-3.5" /> Complete
+            </button>
+            <button
+              onClick={handleBulkDismiss}
+              className="px-3 py-1.5 rounded-lg bg-surface-container text-on-surface hover:bg-surface-container-highest text-xs font-bold transition-premium flex items-center gap-1"
+            >
+              <X className="w-3.5 h-3.5" /> Dismiss
+            </button>
+            <button
+              onClick={() => setShowBulkDelete(true)}
+              className="px-3 py-1.5 rounded-lg bg-red-500/10 text-red-400 hover:bg-red-500/20 text-xs font-bold transition-premium flex items-center gap-1"
+            >
+              <Trash2 className="w-3.5 h-3.5" /> Delete
+            </button>
+            <button
+              onClick={() => setSelectedIds([])}
+              className="text-xs text-on-surface-variant hover:text-on-surface ml-1"
+            >
+              Clear
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Content */}
       {filtered.length === 0 ? (
-        <EmptyState filter={activeFilter} search={searchQuery} />
+        <div className="bg-surface-container rounded-2xl p-12 text-center border border-white/5 animate-slide-up">
+          <div className="w-16 h-16 rounded-2xl bg-surface-container-high flex items-center justify-center mx-auto mb-5">
+            <CalendarClock className="w-7 h-7 text-on-surface-variant/40" />
+          </div>
+          <h3 className="text-title-md text-on-surface mb-2">No deadlines match your filter</h3>
+          <p className="text-body-md text-on-surface-variant max-w-sm mx-auto mb-6">Create a deadline or connect Gmail to automatically detect them.</p>
+          <button onClick={() => navigate("/deadlines/create")} className="btn-primary-gradient px-5 py-2.5 rounded-xl text-sm inline-flex items-center gap-2">
+            <Plus className="w-4 h-4" /> Create Deadline
+          </button>
+        </div>
       ) : (
         <div className="space-y-3">
           {filtered.map((dl, idx) => {
@@ -183,17 +244,29 @@ export function Deadlines() {
             const isActionable = dl.status === "pending" || dl.status === "reminded";
             const urgency = getDeadlineUrgency(dl.due_at, dl.status);
             const isAI = dl.source_text && dl.source_text !== "Manual entry" && dl.confidence_score < 1.0;
+            const isSelected = selectedIds.includes(dl.id);
 
             return (
               <div
                 key={dl.id}
-                className={`bg-surface-container rounded-xl p-5 card-hover animate-slide-up group border ${urgency.cardBorder} relative overflow-hidden`}
+                className={`bg-surface-container rounded-xl p-5 card-hover animate-slide-up group border ${urgency.cardBorder} relative overflow-hidden ${isSelected ? "ring-2 ring-primary" : ""}`}
                 style={{ animationDelay: `${idx * 40}ms` }}
               >
                 {/* Dynamic Urgency Left Stripe */}
                 <div className={`absolute left-0 top-0 bottom-0 w-1.5 ${urgency.stripeBg} rounded-l-xl`} />
 
-                <div className="flex items-start justify-between gap-4 pl-2">
+                <div className="flex items-start justify-between gap-3 pl-2">
+                  {/* Select Checkbox */}
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      toggleSelect(dl.id);
+                    }}
+                    className="mt-1 text-on-surface-variant/40 hover:text-primary transition-premium shrink-0"
+                  >
+                    {isSelected ? <CheckSquare className="w-4 h-4 text-primary" /> : <Square className="w-4 h-4" />}
+                  </button>
+
                   <div className="flex-1 min-w-0 cursor-pointer" onClick={() => navigate(`/deadlines/${dl.id}`)}>
                     <div className="flex items-center gap-2 mb-1 flex-wrap">
                       <p className={`text-title-md truncate transition-premium ${
@@ -279,12 +352,16 @@ export function Deadlines() {
         </div>
       )}
 
-      {filtered.length > 0 && (
-        <div className="mt-6 flex items-center justify-between text-xs text-on-surface-variant/50">
-          <span>{filtered.length} deadline{filtered.length !== 1 ? "s" : ""} shown</span>
-          <span>{pendingCount} pending</span>
-        </div>
-      )}
+      {/* Bulk Delete Dialog */}
+      <ConfirmDialog
+        isOpen={showBulkDelete}
+        onClose={() => setShowBulkDelete(false)}
+        onConfirm={handleBulkDelete}
+        title="Delete Selected Deadlines"
+        message={`This will permanently delete ${selectedIds.length} selected deadline(s). Continue?`}
+        confirmLabel="Delete All"
+        danger
+      />
     </div>
   );
 }

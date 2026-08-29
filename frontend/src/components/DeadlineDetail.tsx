@@ -4,7 +4,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { format, parseISO, formatDistanceToNow } from "date-fns";
 import {
   ArrowLeft, CalendarClock, Clock, Check, X, Trash2,
-  Sparkles, Bell, Plus, AlertTriangle, CheckCircle2,
+  Sparkles, Bell, Plus, AlertTriangle, CheckCircle2, Edit3,
 } from "lucide-react";
 import { deadlinesApi } from "../api/deadlines";
 import { remindersApi } from "../api/reminders";
@@ -141,10 +141,18 @@ export function DeadlineDetail() {
 
   return (
     <div className="max-w-2xl mx-auto">
-      {/* Back */}
-      <button onClick={() => navigate("/deadlines")} className="flex items-center gap-2 text-on-surface-variant hover:text-on-surface transition-premium mb-6 text-sm">
-        <ArrowLeft className="w-4 h-4" />Back to Deadlines
-      </button>
+      {/* Back & Edit Action */}
+      <div className="flex items-center justify-between mb-6">
+        <button onClick={() => navigate("/deadlines")} className="flex items-center gap-2 text-on-surface-variant hover:text-on-surface transition-premium text-sm">
+          <ArrowLeft className="w-4 h-4" />Back to Deadlines
+        </button>
+        <button
+          onClick={() => navigate(`/deadlines/${id}/edit`)}
+          className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-surface-container text-on-surface hover:bg-surface-container-high border border-white/5 text-xs font-semibold transition-premium"
+        >
+          <Edit3 className="w-3.5 h-3.5 text-primary" />Edit Deadline
+        </button>
+      </div>
 
       {/* Main Card with Urgency Theme */}
       <div className={`bg-surface-container rounded-2xl border ${urgency.cardBorder} overflow-hidden mb-4`}>
